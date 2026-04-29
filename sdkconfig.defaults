@@ -1,0 +1,16 @@
+# 1. 设置 Flash 大小为 16MB
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# 2. 启用 PSRAM
+CONFIG_SPIRAM=y
+
+# 3. 配置 R8 的 Octal PSRAM (8MB)
+# N16R8 使用的是 Octal SPI PSRAM，必须开启此选项
+CONFIG_SPIRAM_MODE_OCT=y
+
+# 4. 设置 PSRAM 速度 (Octal 通常支持 80MHz 或 120MHz，建议先设 80MHz 稳定)
+CONFIG_SPIRAM_SPEED_80M=y
+
+# 5. 禁用证书包 (解决你之前的 x509_crt_bundle 报错)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
