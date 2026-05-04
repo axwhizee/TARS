@@ -7,17 +7,15 @@
 
 static const char *TAG = "LD14P";
 
+/* 协议内部宏 (不暴露给外部) */
 #define LD14P_HEADER         0x54
 #define LD14P_PACKET_LEN     47
 #define LD14P_POINT_PER_PACK 12
 #define LD14P_ANGLE_RES      100
 #define LD14P_CMD_SPEED      0xA2
 #define LD14P_CMD_LEN        4
-#define LD14P_UART_NUM       UART_NUM_1
-#define LD14P_UART_BAUD      115200
-#define LD14P_UART_TX_PIN    17
-#define LD14P_UART_RX_PIN    18
-#define LD14P_UART_RX_BUF    2048
+
+/* UART配置来自 all_defs.h (通过 ld14p.h 间接包含) */
 
 static const uint8_t CRC_TABLE[256] = {
     0x00, 0x4d, 0x9a, 0xd7, 0x79, 0x34, 0xe3,

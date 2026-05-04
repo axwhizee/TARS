@@ -1,4 +1,15 @@
-/* main.c */
+/*
+ * ESP32_Template — 主入口
+ *
+ * 启动流程:
+ *   1. 初始化 LD14P 激光雷达 (UART1 @ 115200, 4Hz)
+ *   2. 创建 360 元素队列 (vector_polar_t)
+ *   3. 启动三个任务:
+ *      - vLedTask        (prio 1) 系统指示灯
+ *      - ld14p_sensor    (prio 5) LD14P 数据读取 + 推送队列
+ *      - logger          (prio 4) 队列消费 + UART0 上传
+ */
+#include "all_defs.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -8,10 +19,9 @@
 #include "tasks/lidar_task.h"
 #include "tasks/logger.h"
 
-#define LED_PIN 48
 static const char *TAG = "MAIN";
 
-void vLedTask(void *pvParameters) {
+static void vLedTask(void *pvParameters) {
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << LED_PIN),
         .mode = GPIO_MODE_OUTPUT,

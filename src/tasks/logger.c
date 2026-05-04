@@ -1,13 +1,11 @@
 #include "tasks/logger.h"
-#include "drivers/ld14p.h"
+#include "all_defs.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/uart.h"
 #include "esp_log.h"
 
 static const char *TAG = "LOGGER";
-
-#define UPLOAD_HEADER  0xAA
 
 void logger_task(void *arg) {
     QueueHandle_t queue = (QueueHandle_t)arg;
