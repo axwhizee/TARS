@@ -79,3 +79,14 @@ bool ld14p_scan_ready(void);
  * @endcode
  */
 esp_err_t ld14p_get_scan(vector_polar_t *out, uint16_t *count);
+
+/**
+ * @brief 获取累计处理的字节数 (可用来检测数据流是否中断)
+ * @return 累计通过 ld14p_feed_byte() 喂入的字节数
+ */
+uint32_t ld14p_get_total_bytes(void);
+
+/**
+ * @brief 重新发送频率命令; 用于数据流中断后触发的恢复
+ */
+void ld14p_kick(void);

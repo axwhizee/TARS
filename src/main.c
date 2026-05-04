@@ -20,6 +20,7 @@
 #include "tasks/logger.h"
 
 static const char *TAG = "MAIN";
+static QueueHandle_t scan_queue = NULL;  /* 全局, 避免app_main返回后栈失效 */
 
 static void vLedTask(void *pvParameters) {
     gpio_config_t io_conf = {
@@ -40,11 +41,15 @@ static void vLedTask(void *pvParameters) {
 void app_main(void) {
     ESP_LOGI(TAG, "System Init");
 
-    ld14p_init(4);
+    esp_err_t err = ld14p_init(4);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "LD14P init failed: %s", esp_err_to_name(err));
+        return;
+    }
 
-    QueueHandle_t scan_queue = xQueueCreate(360, sizeof(vector_polar_t));
+    scan_queue = xQueueCreate(360, sizeof(vector_polar_t));
 
-    xTaskCreate(vLedTask,           "LedTask",       2048, NULL,                  1, NULL);
-    xTaskCreate(ld14p_sensor_task,  "ld14p_sensor",  8192, (void *)scan_queue,    5, NULL);
-    xTaskCreate(logger_task,        "logger",        4096, (void *)scan_queue,    4, NULL);
+    xTaskCreate(vLedTask,           "LedTask",       2048, NULL,               1, NULL);
+    xTaskCreate(ld14p_sensor_task,  "ld14p_sensor",  8192, (void *)scan_queue, 5, NULL);
+    xTaskCreate(logger_task,        "logger",        4096, (void *)scan_queue, 4, NULL);
 }

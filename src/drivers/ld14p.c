@@ -17,6 +17,8 @@ static const char *TAG = "LD14P";
 
 /* UART配置来自 all_defs.h (通过 ld14p.h 间接包含) */
 
+static void ld14p_set_freq(uint8_t freq_hz);
+
 static const uint8_t CRC_TABLE[256] = {
     0x00, 0x4d, 0x9a, 0xd7, 0x79, 0x34, 0xe3,
     0xae, 0xf2, 0xbf, 0x68, 0x25, 0x8b, 0xc6, 0x11, 0x5c, 0xa9, 0xe4, 0x33,
@@ -60,8 +62,31 @@ static volatile bool revolution_flag = false;
 
 static uint32_t crc_ok_count = 0;
 static uint32_t crc_fail_count = 0;
+static uint32_t rev_last_tick = 0;
+static uint32_t total_fed = 0;           /* 累计喂入字节数 */
+static uint8_t last_freq = 4;            /* 最近设置的频率, 用于kick重发 */
 
 static void ld14p_update_cloud(uint8_t *buf) {
+    /* 角度追踪不依赖CRC — 每个收集到的47字节块都用来追踪角度,
+     * 防止高CRC失败率导致prev_start_angle卡死, revolution永不触发.
+     * 最小圈间隔 >150ms 过滤随机数据误触发. */
+    uint16_t start_angle = (buf[5] << 8) | buf[4];
+    uint16_t end_angle   = (buf[43] << 8) | buf[42];
+
+    uint32_t now = xTaskGetTickCount();
+    if (prev_start_angle > 30000 && start_angle < 6000
+        && (now - rev_last_tick) > pdMS_TO_TICKS(150)) {
+        revolution_flag = true;
+        rev_last_tick = now;
+        ESP_LOGI(TAG, "Revolution complete! pkts_ok=%lu pkts_fail=%lu start=%u end=%u",
+                 crc_ok_count, crc_fail_count, start_angle, end_angle);
+        memset(cloud_360, 0xFF, sizeof(cloud_360));
+        crc_ok_count  = 0;
+        crc_fail_count = 0;
+    }
+    prev_start_angle = start_angle;
+
+    /* CRC校验 */
     uint8_t crc = ld14p_crc8(buf, LD14P_PACKET_LEN - 1);
     if (crc != buf[LD14P_PACKET_LEN - 1]) {
         crc_fail_count++;
@@ -70,16 +95,6 @@ static void ld14p_update_cloud(uint8_t *buf) {
         return;
     }
     crc_ok_count++;
-
-    uint16_t start_angle = (buf[5] << 8) | buf[4];
-    uint16_t end_angle   = (buf[43] << 8) | buf[42];
-
-    if (prev_start_angle > 30000 && start_angle < 6000) {
-        revolution_flag = true;
-        ESP_LOGI(TAG, "Revolution complete! pkts_ok=%lu pkts_fail=%lu start=%u end=%u",
-                 crc_ok_count, crc_fail_count, start_angle, end_angle);
-    }
-    prev_start_angle = start_angle;
 
     int16_t diff = end_angle - start_angle;
     if (diff < 0) diff += 360 * LD14P_ANGLE_RES;
@@ -98,6 +113,8 @@ void ld14p_feed_byte(uint8_t byte) {
     static uint8_t buf[LD14P_PACKET_LEN];
     static uint8_t idx = 0;
 
+    total_fed++;
+
     if (state == 0) {
         if (byte == LD14P_HEADER) {
             buf[0] = LD14P_HEADER;
@@ -112,6 +129,14 @@ void ld14p_feed_byte(uint8_t byte) {
             ld14p_update_cloud(buf);
         }
     }
+}
+
+uint32_t ld14p_get_total_bytes(void) {
+    return total_fed;
+}
+
+void ld14p_kick(void) {
+    ld14p_set_freq(last_freq);
 }
 
 bool ld14p_scan_ready(void) {
@@ -132,6 +157,7 @@ esp_err_t ld14p_get_scan(vector_polar_t *out, uint16_t *count) {
 }
 
 static void ld14p_set_freq(uint8_t freq_hz) {
+    last_freq = freq_hz;
     uint16_t speed = (uint16_t)freq_hz * 360;
     uint8_t cmd[8] = { 0x54, LD14P_CMD_SPEED, LD14P_CMD_LEN,
                        (uint8_t)(speed & 0xFF), (uint8_t)(speed >> 8), 0x00, 0x00, 0x00 };
@@ -152,17 +178,22 @@ esp_err_t ld14p_init(uint8_t freq_hz) {
         .source_clk = UART_SCLK_DEFAULT,
     };
 
-    esp_err_t err = uart_driver_install(LD14P_UART_NUM, LD14P_UART_RX_BUF, 0, 0, NULL, 0);
-    if (err != ESP_OK) return err;
-    err = uart_param_config(LD14P_UART_NUM, &cfg);
+    /* 按ESP-IDF推荐顺序: param_config → set_pin → driver_install */
+    esp_err_t err = uart_param_config(LD14P_UART_NUM, &cfg);
     if (err != ESP_OK) return err;
     err = uart_set_pin(LD14P_UART_NUM, LD14P_UART_TX_PIN, LD14P_UART_RX_PIN,
                        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) return err;
+    /* TX buf=0 → 同步直写硬件 FIFO (仅8字节命令); RX buf 给足余量 */
+    err = uart_driver_install(LD14P_UART_NUM, LD14P_UART_RX_BUF * 2, 0, 0, NULL, 0);
+    if (err != ESP_OK) return err;
 
-    memset(cloud_360, 0, sizeof(cloud_360));
-    vTaskDelay(pdMS_TO_TICKS(100));  // let LD14P stabilize before command
+    /* LD14P 上电即旋转发数 (~11520 字节/秒).
+     * ring buffer 仅 4096 字节 (~355ms 容量), 大延时会导致溢出.
+     * 所以: 短等 → 发命令 → 再短等让电机稳定即可. */
+    vTaskDelay(pdMS_TO_TICKS(100));
     ld14p_set_freq(freq_hz);
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     ESP_LOGI(TAG, "LD14P ready on UART1 (TX:17 RX:18) @ %d Hz", freq_hz);
     return ESP_OK;
