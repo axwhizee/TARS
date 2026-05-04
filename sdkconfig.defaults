@@ -14,3 +14,6 @@ CONFIG_SPIRAM_SPEED_80M=y
 
 # 5. 禁用证书包 (解决你之前的 x509_crt_bundle 报错)
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+
+# 6. Update flash image header to 16MB
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y
