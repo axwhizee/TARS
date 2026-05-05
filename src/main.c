@@ -15,9 +15,9 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
-#include "drivers/ld14p.h"
-#include "tasks/lidar_task.h"
-#include "tasks/logger.h"
+// #include "drivers/ld14p.h"
+// #include "tasks/lidar_task.h"
+// #include "tasks/logger.h"
 
 static const char *TAG = "MAIN";
 
@@ -45,6 +45,6 @@ void app_main(void) {
     QueueHandle_t scan_queue = xQueueCreate(360, sizeof(vector_polar_t));
 
     xTaskCreate(vLedTask,           "LedTask",       2048, NULL,                  1, NULL);
-    xTaskCreate(ld14p_sensor_task,  "ld14p_sensor",  8192, (void *)scan_queue,    5, NULL);
-    xTaskCreate(logger_task,        "logger",        4096, (void *)scan_queue,    4, NULL);
+    // xTaskCreate(ld14p_sensor_task,  "ld14p_sensor",  8192, (void *)scan_queue,    5, NULL);
+    // xTaskCreate(logger_task,        "logger",        4096, (void *)scan_queue,    4, NULL);
 }
