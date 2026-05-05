@@ -1,92 +1,66 @@
 #pragma once
 #include "all_defs.h"
 
-/* ============================================================
- *  LD14P 激光雷达驱动 — 公开API
- *  底层UART初始化、协议状态机、360° 点云获取
+/*
+ * ld14p.h — LD14P 激光雷达驱动
  *
- *  使用流程:
- *    1. ld14p_init(4)          — 初始化UART + 设置频率
- *    2. ld14p_feed_byte() x N  — 将UART字节喂入状态机
- *    3. ld14p_scan_ready()     — 轮询检测一圈是否完成
- *    4. ld14p_get_scan()       — 获取360点快照
- * ============================================================ */
-
-/**
- * @brief 初始化LD14P激光雷达
- *        - 安装UART1驱动 (115200, 8N1, TX=17, RX=18)
- *        - 清零点云缓冲区
- *        - 通过0xA2命令设置目标扫描频率
+ * 内部类型 (调用者不需要直接操作):
+ *   ld14p_point_t — 单个采样点 (距离 + 强度)
+ *   ld14p_frame_t — 一个 47 字节的线帧 (packed, 直接映射协议)
  *
- * @param freq_hz 扫描频率 (2~8 Hz). 经实测频率以4Hz最稳定
- * @return esp_err_t
- *   - ESP_OK          成功
- *   - ESP_ERR_INVALID_ARG  freq_hz超出范围
- *   - ESP_ERR_NO_MEM   互斥锁创建失败
- *   - 其他 UART驱动安装/配置错误码
- *
- * @note 波特率经实测为115200 (与手册标注的230400不同)
+ * 公开 API:
+ *   1. ld14p_init(4)             — 初始化 UART1 + 发送 0xA2 频率命令
+ *   2. ld14p_feed_byte(byte)     — 喂入一个字节, 拼出完整帧后 CRC 验证,
+ *                                  返回帧指针 (NULL = 尚未完成或 CRC 失败)
+ *   3. ld14p_process_frame(frm)  — 解析帧: 角度插值 → 写入 cloud_360[],
+ *                                  检测完整一圈 → 返回 true
+ *   4. ld14p_get_cloud(out)      — 快照 cloud_360[] → vector_polar_t[360],
+ *                                  返回有效点数
  */
+
+/* ────────── 内部数据类型 ────────── */
+
+typedef struct __attribute__((packed)) {
+    uint16_t distance;       /* 距离值 (毫米), LSB 在前, 0xFFFF 表示未填充 */
+    uint8_t  intensity;      /* 反射强度 (0~255) */
+} ld14p_point_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t       header;                            /* [0]  0x54 */
+    uint8_t       ver_len;                           /* [1]  0x2C */
+    uint16_t      speed;                             /* [2..3] 转速 (°/s) */
+    uint16_t      start_angle;                       /* [4..5] 起始角度 (×0.01°) */
+    ld14p_point_t points[LD14P_POINTS_PER_PACK];     /* [6..41] 12 个采样点 */
+    uint16_t      end_angle;                         /* [42..43] 结束角度 */
+    uint16_t      timestamp;                         /* [44..45] 时间戳 (ms) */
+    uint8_t       crc8;                              /* [46] CRC8 */
+} ld14p_frame_t;
+
+/* ────────── 公开 API ────────── */
+
 esp_err_t ld14p_init(uint8_t freq_hz);
 
-/**
- * @brief 向协议状态机喂入一个字节
+/*
+ * ld14p_feed_byte — 喂入一个字节
  *
- * 内部状态机自动完成:
- *   搜索帧头0x54 → 拼装47字节包 → CRC8校验(多项式0x4D)
- *   → 解析12个测量点 → 角度插值 → 更新cloud_360[]
- *
- * 此函数可反复调用, 无需了解LD14P协议细节.
- * 通常由传感器任务从UART读取字节后调用此函数.
- *
- * @param byte 从UART1 RX线收到的原始字节
+ * 内部: 状态机搜帧头 → 拼 47B → VerLen 检查 → CRC8 验证.
+ * 返回: 通过验证的帧指针, 或 NULL (尚未拼完 / 校验失败).
+ * 指针有效期: 至下一次本函数调用.
  */
-void ld14p_feed_byte(uint8_t byte);
+const ld14p_frame_t *ld14p_feed_byte(uint8_t byte);
 
-/**
- * @brief 检查一整圈360°扫描是否已完整接收
+/*
+ * ld14p_process_frame — 解析一帧, 更新点云
  *
- * 内部通过监测start_angle从>30000翻转到<6000来判断一圈完成.
- * 每次调用返回true后会**清除标志**, 下次调用重新返回false直到下一圈完成.
- *
- * @return true  刚完成一整圈扫描 (cloud_360[]已包含所有360°数据)
- * @return false 尚未完成一整圈或已被消费
- *
- * @note 应在传感器任务中轮询调用, 返回true后配合ld14p_get_scan()读取数据
+ * 角度插值 → 更新 cloud_360[] → 检测 360° 圈完成.
+ * 返回 true 表示 cloud_360[] 刚完成一整圈数据.
  */
-bool ld14p_scan_ready(void);
+bool ld14p_process_frame(const ld14p_frame_t *frm);
 
-/**
- * @brief 获取当前360°点云快照
+/*
+ * ld14p_get_cloud — 获取当前 360° 点云快照
  *
- * 拷贝cloud_360[]快照到用户缓冲区, 输出以传感器正前方为0°、
- * 顺时针递增的360个距离-角度点.
- * 不做坐标系转换(保持LD14P原生坐标系).
- *
- * @param[out] out   输出缓冲区, 需至少LD14P_POINTS_PER_REV (360) 个元素
- * @param[out] count 固定输出 360
- * @return esp_err_t
- *   - ESP_OK           成功
- *   - ESP_ERR_INVALID_ARG   out或count为NULL
- *
- * @code
- *   vector_polar_t scan[360];
- *   uint16_t n;
- *   if (ld14p_get_scan(scan, &n) == ESP_OK) {
- *       // scan[i].angle_deg   = i          (0~359°)
- *       // scan[i].distance_mm = 距离(毫米)
- *   }
- * @endcode
+ * 将内部 cloud_360[] 转为 vector_polar_t[360], 返回有效点数 (< 60000 mm).
+ * out[i].angle_deg = i, out[i].distance_mm = 距离或 65535 (无效).
  */
-esp_err_t ld14p_get_scan(vector_polar_t *out, uint16_t *count);
-
-/**
- * @brief 获取累计处理的字节数 (可用来检测数据流是否中断)
- * @return 累计通过 ld14p_feed_byte() 喂入的字节数
- */
-uint32_t ld14p_get_total_bytes(void);
-
-/**
- * @brief 重新发送频率命令; 用于数据流中断后触发的恢复
- */
-void ld14p_kick(void);
+uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV]);

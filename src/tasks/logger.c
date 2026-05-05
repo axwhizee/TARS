@@ -21,8 +21,7 @@ void logger_task(void *arg) {
         for (i = 0; i < LD14P_POINTS_PER_REV; i++) {
             if (xQueueReceive(queue, &scan_buf[i], pdMS_TO_TICKS(1000)) != pdTRUE) {
                 /* 1000ms 无数据 → 打印心跳 + 驱动统计 */
-                ESP_LOGW(TAG, "Beat #%lu: fed=%lu (got %d/360)", alive++,
-                         ld14p_get_total_bytes(), i);
+                ESP_LOGW(TAG, "Beat #%lu: got %d/360", alive++, i);
                 break;
             }
         }
