@@ -1,15 +1,26 @@
 #pragma once
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stdint.h>
 
-/* ============================================================
- *  LD14P 激光雷达 公共宏定义与数据结构
- * ============================================================ */
+/*
+ * all_defs.h — 项目公共定义
+ */
 
-/* ---------- 点云数据结构 ---------- */
+/* ---------- LD14P 数据协议 ---------- */
 
+#define LD14P_POINTS_PER_PACK 12
 #define LD14P_POINTS_PER_REV  360
+#define LIDAR_SECTORS         36       /* 降采样: 每个扇区 10°, 共 36 个输出点 */
 
+/* ---------- 任务间同步 ---------- */
+
+#define BIT_LIDAR_READY       (1 << 0) /* APF 任务的 lidar 数据就绪位 */
+
+/*
+ * vector_polar_t — 带显式角度的输出结构 (公用数据类型)
+ * angle_deg: 传感器正前方为 0°, 顺时针递增 (LD14P 原生坐标系)
+ */
 typedef struct {
     float distance_mm;
     float angle_deg;
