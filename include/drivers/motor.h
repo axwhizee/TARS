@@ -55,7 +55,7 @@ void motor_coast(void);
 /**
  * @brief 释放 LEDC 资源 (仅调试 / 重启前调用)
  */
-void motor_deinit(void);
+// void motor_deinit(void);
 
 #ifdef __cplusplus
 }

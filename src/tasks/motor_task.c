@@ -1,14 +1,20 @@
 /**
  * @file motor_task.c
- * @brief 电机控制任务: EMA 低通滤波 + 笛卡尔→差速转换 + 状态机 + 换向死区
+ * @brief 电机控制任务: EMA 插值平滑 + 笛卡尔→差速转换 + 状态机 + 换向死区
  *
- * 数据流:
- *   APF 任务 → q_cart(vector_cart_t) → 本任务
- *     → EMA 滤波 → 状态分类 → 差速解算 → 死区管理 → motor_set()
+ * 架构:
+ *   以固定 8Hz (125ms) 周期运行, 配合 4Hz 传感器实现帧间 EMA 插值平滑.
  *
- * 状态机 (5 态):
- *   IDLE → FORWARD / REVERSE / FORWARD_TURN / REVERSE_TURN
- *   换向反转 (前→后 / 后→前) 时插入 MOTOR_DEADTIME_MS 制动保持
+ *   主循环:
+ *     g_q_cart ──非阻塞接收──▶ motor_cmd_to_ema()     → ema_x/y
+ *                              motor_clamp_classify()  → state
+ *                              motor_diff_to_pwm()     → left/right pwm
+ *                              motor_set()
+ *
+ *   三大 static 函数:
+ *     1. motor_cmd_to_ema()     — 指令→EMA 滤波 (含目标衰减)
+ *     2. motor_clamp_classify() — 钳位 + 5 态分类
+ *     3. motor_diff_to_pwm()    — 笛卡尔→差速 PWM
  */
 
 #include "tasks/motor_task.h"
@@ -19,84 +25,137 @@
 #include "esp_log.h"
 #include <math.h>
 
-static const char *TAG = "MOTOR_CTL";
-
-/* ---------------------------------------------------------- */
-/* 辅助函数                                                     */
-/* ---------------------------------------------------------- */
+static const char *TAG = "MOTOR_TASK";
 
 /**
- * @brief 钳位浮点值到 [lo, hi] 范围
- */
-static inline float clampf(float val, float lo, float hi)
-{
-    if (val < lo) return lo;
-    if (val > hi) return hi;
-    return val;
-}
-
-/**
- * @brief EMA 低通滤波更新
+ * @brief 将上游 raw cmd 注入 EMA 滤波器, 输出平滑后的笛卡尔分量
  *
- * y[n] = α·x[n] + (1-α)·y[n-1]
- * α 越小 → 越平滑但响应越慢
- * α=0.3 → 约 3 个周期达到 63% 稳态值
+ * @param cmd     新指令指针 (NULL 表示本周期无新指令)
+ * @param ema_x   [in/out] x 分量 EMA 状态
+ * @param ema_y   [in/out] y 分量 EMA 状态
+ * @param target_x [in/out] EMA 目标 (有指令时更新, 超时时归零)
+ * @param target_y [in/out] 同上
+ * @param last_tick [in/out] 最后收到指令的时刻 (tick count)
+ *
+ * 行为:
+ *   - 有 cmd → 更新 target = cmd.xy, 记录时间戳
+ *   - 无 cmd 且距上次 > 1s → target → 0 (安全停车)
+ *   - 每周期: ema = α·target + (1-α)·ema
+ *   - 钳位到 ±6m
  */
-static inline float ema_update(float *state, float input, float alpha)
+static void motor_cmd_to_ema(const vector_cart_t *cmd,
+                             float *ema_x, float *ema_y,
+                             float *target_x, float *target_y,
+                             TickType_t *last_tick)
 {
-    *state = alpha * input + (1.0f - alpha) * (*state);
-    return *state;
+    TickType_t now = xTaskGetTickCount();
+
+    if (cmd != NULL) {
+        *target_x = cmd->x;
+        *target_y = cmd->y;
+        *last_tick = now;
+    }
+
+    /* 上游断流超过超时 → 目标归零 (EMA 将自然趋近零) */
+    if ((now - *last_tick) > pdMS_TO_TICKS(MOTOR_INPUT_TIMEOUT_MS)) {
+        *target_x = 0.0f;
+        *target_y = 0.0f;
+    }
+
+    /* EMA 低通: y[n] = α·x[n] + (1-α)·y[n-1] */
+    *ema_x = MOTOR_EMA_ALPHA * (*target_x) + (1.0f - MOTOR_EMA_ALPHA) * (*ema_x);
+    *ema_y = MOTOR_EMA_ALPHA * (*target_y) + (1.0f - MOTOR_EMA_ALPHA) * (*ema_y);
+
+    /* 钳位到有效范围 */
+    if (*ema_x >  6000.0f) *ema_x =  6000.0f;
+    if (*ema_x < -6000.0f) *ema_x = -6000.0f;
+    if (*ema_y >  6000.0f) *ema_y =  6000.0f;
+    if (*ema_y < -6000.0f) *ema_y = -6000.0f;
 }
 
 /**
- * @brief 根据滤波后的笛卡尔分量判定当前状态
+ * @brief 根据滤波后的笛卡尔分量判定电机运行状态
  *
  * 分类逻辑:
- *   |x|<DZ 且 |y|<DZ          → IDLE       (死区)
+ *   |x|<DZ 且 |y|<DZ         → IDLE
  *   |y| < TURN_THRES * |x|   → FORWARD / REVERSE (近似直线)
- *   |y| >= TURN_THRES * |x|  → FORWARD_TURN / REVERSE_TURN (转向)
+ *   |y| >= TURN_THRES * |x|  → FORWARD_TURN / REVERSE_TURN
  *
- * 符号: x>0 为前进方向 (FORWARD), x<0 为后退方向 (REVERSE)
+ * @param x  EMA 滤波后的 x 分量 (mm), >0 前进 / <0 后退
+ * @param y  EMA 滤波后的 y 分量 (mm), >0 右转 / <0 左转
+ * @return motor_state_t
  */
-static motor_state_t classify_state(float x, float y)
+static motor_state_t motor_clamp_classify(float x, float y)
 {
     float ax = fabsf(x);
     float ay = fabsf(y);
 
-    /* 死区内 → IDLE */
     if (ax < MOTOR_DEADZONE_MM && ay < MOTOR_DEADZONE_MM) {
         return MOTOR_STATE_IDLE;
     }
 
-    /* 纯旋转 (x≈0, y≠0): 归为转向, x=0 视为正向 (避免除零) */
+    /* x≈0 但 y≠0: 纯原地旋转 */
     if (ax < MOTOR_DEADZONE_MM) {
         return (y > 0.0f) ? MOTOR_STATE_FORWARD_TURN
                           : MOTOR_STATE_REVERSE_TURN;
     }
 
-    /* 直线 vs 转向判定 */
     if (ay < MOTOR_TURN_THRESHOLD * ax) {
-        /* 近似直线运动 */
         return (x > 0.0f) ? MOTOR_STATE_FORWARD : MOTOR_STATE_REVERSE;
     } else {
-        /* 差速转向 */
         return (x > 0.0f) ? MOTOR_STATE_FORWARD_TURN : MOTOR_STATE_REVERSE_TURN;
     }
 }
 
 /**
- * @brief 判断状态迁移是否发生 "前进<->后退" 方向反转
+ * @brief 将笛卡尔合力 (x, y) 转换为左右轮 PWM 占空比
  *
- * 方向反转 → 需要插入制动死区保护 DRV8833
- * 同一方向内的状态切换 (如 FORWARD→FORWARD_TURN) 不需要死区
+ * 算法:
+ *   1. 归一化: linear = x/6000, angular = y/6000 * TURN_RATIO
+ *   2. 差速:   left = linear - angular, right = linear + angular
+ *   3. 比例保持: 若任一侧超出 [-1,1], 等比例缩放两侧
+ *   4. IDLE 状态强制归零
+ *   5. PWM: pwm = speed * MOTOR_MAX_DUTY
+ *
+ * @param x        EMA 滤波后的 x (mm)
+ * @param y        EMA 滤波后的 y (mm)
+ * @param state   当前电机状态
+ * @param left_pwm  [out] 左轮 PWM 占空比
+ * @param right_pwm [out] 右轮 PWM 占空比
  */
+static void motor_diff_to_pwm(float x, float y, motor_state_t state,
+                              int16_t *left_pwm, int16_t *right_pwm)
+{
+    float linear  = x / 6000.0f;
+    float angular = y / 6000.0f * MOTOR_TURN_RATIO;
+
+    float left  = linear - angular;
+    float right = linear + angular;
+
+    /* 比例归一化: 保持转向比, 不超出 [-1,1] */
+    float m = fabsf(left);
+    if (fabsf(right) > m) m = fabsf(right);
+    if (m > 1.0f) {
+        left  /= m;
+        right /= m;
+    }
+
+    if (state == MOTOR_STATE_IDLE) {
+        left  = 0.0f;
+        right = 0.0f;
+    }
+
+    *left_pwm  = (int16_t)(left  * MOTOR_MAX_DUTY);
+    *right_pwm = (int16_t)(right * MOTOR_MAX_DUTY);
+}
+
+/* 换向死区判断 (工具) */
 static bool is_direction_reversal(motor_state_t prev, motor_state_t next)
 {
     if (prev == next || prev == MOTOR_STATE_IDLE || next == MOTOR_STATE_IDLE) {
         return false;
     }
 
-    /* 前进类状态: FORWARD / FORWARD_TURN */
     bool prev_fwd = (prev == MOTOR_STATE_FORWARD || prev == MOTOR_STATE_FORWARD_TURN);
     bool next_fwd = (next == MOTOR_STATE_FORWARD || next == MOTOR_STATE_FORWARD_TURN);
 
@@ -104,113 +163,63 @@ static bool is_direction_reversal(motor_state_t prev, motor_state_t next)
 }
 
 /* ---------------------------------------------------------- */
-/* 任务主体                                                     */
+/* 任务主体: 8Hz 固定周期                                       */
 /* ---------------------------------------------------------- */
 
 void motor_task(void *pvParameters)
 {
-    motor_task_params_t *params = (motor_task_params_t *)pvParameters;
-    vector_cart_t cmd;
+    (void)pvParameters;
 
-    /* --- EMA 滤波器状态 --- */
-    float ema_x = 0.0f;
-    float ema_y = 0.0f;
+    /* EMA 滤波器状态 */
+    float ema_x = 0.0f,  ema_y  = 0.0f;
+    float tgt_x = 0.0f,  tgt_y  = 0.0f;
+    TickType_t last_cmd_tick = 0;
 
-    /* --- 当前运行状态 --- */
+    /* 状态机 */
     motor_state_t prev_state = MOTOR_STATE_IDLE;
     motor_state_t new_state;
 
-    /* --- PWM 速度值 --- */
-    float linear, angular;
-    float left_spd, right_spd;
+    /* PWM 输出 */
     int16_t left_pwm, right_pwm;
-    float max_spd;
 
-    ESP_LOGI(TAG, "Motor control task started, alpha=%.2f deadzone=%.0fmm",
-             (double)MOTOR_EMA_ALPHA, (double)MOTOR_DEADZONE_MM);
+    /* 固定周期调度 */
+    TickType_t wake_time = xTaskGetTickCount();
+
+    ESP_LOGI(TAG, "Motor control started: %dHz (period=%ums) alpha=%.3f tau=%.0fms",
+             MOTOR_CTL_HZ, MOTOR_CTL_PERIOD_MS,
+             (double)MOTOR_EMA_ALPHA, (double)MOTOR_EMA_TC_MS);
 
     while (1) {
-        /* ============================================ */
-        /* 1. 等待上游指令 (带 100ms 超时)              */
-        /* ============================================ */
-        if (xQueueReceive(params->q_cart, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
-            /* 收到新指令 → EMA 滤波平滑 */
-            ema_x = ema_update(&ema_x, cmd.x, MOTOR_EMA_ALPHA);
-            ema_y = ema_update(&ema_y, cmd.y, MOTOR_EMA_ALPHA);
-        } else {
-            /* 上游断流 (超时) → 向零衰减, 自然停车 */
-            ema_x *= MOTOR_DECAY_FACTOR;
-            ema_y *= MOTOR_DECAY_FACTOR;
+        vTaskDelayUntil(&wake_time, pdMS_TO_TICKS(MOTOR_CTL_PERIOD_MS));
 
-            /* 接近零点时直接清零，避免无限微小残留 */
-            if (fabsf(ema_x) < (MOTOR_DEADZONE_MM * 0.5f)) ema_x = 0.0f;
-            if (fabsf(ema_y) < (MOTOR_DEADZONE_MM * 0.5f)) ema_y = 0.0f;
+        /* ---- 非阻塞取指令 ---- */
+        vector_cart_t cmd;
+        const vector_cart_t *pcmd = NULL;
+        if (xQueueReceive(g_q_cart, &cmd, 0) == pdTRUE) {
+            pcmd = &cmd;
         }
 
-        /* ============================================ */
-        /* 2. 钳位到有效范围 (±6m)                      */
-        /* ============================================ */
-        ema_x = clampf(ema_x, -6000.0f, 6000.0f);
-        ema_y = clampf(ema_y, -6000.0f, 6000.0f);
+        /* ---- Step 1: 指令→EMA 滤波 ---- */
+        motor_cmd_to_ema(pcmd, &ema_x, &ema_y,
+                         &tgt_x, &tgt_y, &last_cmd_tick);
 
-        /* ============================================ */
-        /* 3. 状态分类                                   */
-        /* ============================================ */
-        new_state = classify_state(ema_x, ema_y);
+        /* ---- Step 2: 钳位 + 状态分类 ---- */
+        new_state = motor_clamp_classify(ema_x, ema_y);
 
-        /* ============================================ */
-        /* 4. 换向死区保护                               */
-        /*   前进→后退 或 后退→前进 → 先制动再延迟      */
-        /* ============================================ */
+        /* ---- Step 3: 换向死区保护 ---- */
         if (is_direction_reversal(prev_state, new_state)) {
-            ESP_LOGD(TAG, "Direction reversal: %d -> %d, dead-time %dms",
+            ESP_LOGD(TAG, "Reversal %d→%d, dead-time %dms",
                      (int)prev_state, (int)new_state, MOTOR_DEADTIME_MS);
             motor_brake();
             vTaskDelay(pdMS_TO_TICKS(MOTOR_DEADTIME_MS));
         }
 
-        /* ============================================ */
-        /* 5. 笛卡尔 → 差速转换                          */
-        /*                                              */
-        /*   归一化到 [-1, 1]:                           */
-        /*     linear  = x / 6000                        */
-        /*     angular = y / 6000 * TURN_RATIO           */
-        /*                                              */
-        /*   差速公式:                                   */
-        /*     left  = linear - angular                  */
-        /*     right = linear + angular                  */
-        /*                                              */
-        /*   比例保持归一化: 若任一侧超出 [-1,1],         */
-        /*   同时缩小两侧以保持转向比例                   */
-        /* ============================================ */
-        linear  = ema_x / 6000.0f;
-        angular = ema_y / 6000.0f * MOTOR_TURN_RATIO;
+        /* ---- Step 4: 笛卡尔→差速 PWM ---- */
+        motor_diff_to_pwm(ema_x, ema_y, new_state, &left_pwm, &right_pwm);
 
-        left_spd  = linear - angular;
-        right_spd = linear + angular;
-
-        /* 比例归一化: max(|L|, |R|) > 1 → 等比例缩放 */
-        max_spd = fabsf(left_spd);
-        if (fabsf(right_spd) > max_spd) max_spd = fabsf(right_spd);
-        if (max_spd > 1.0f) {
-            left_spd  /= max_spd;
-            right_spd /= max_spd;
-        }
-
-        /* IDLE 状态强制归零 */
-        if (new_state == MOTOR_STATE_IDLE) {
-            left_spd  = 0.0f;
-            right_spd = 0.0f;
-        }
-
-        /* ============================================ */
-        /* 6. 转换为 PWM 占空比并发送                    */
-        /* ============================================ */
-        left_pwm  = (int16_t)(left_spd  * MOTOR_MAX_DUTY);
-        right_pwm = (int16_t)(right_spd * MOTOR_MAX_DUTY);
-
-        /* 驱动层二次钳位 (安全检查) */
+        /* ---- Step 5: 驱动输出 ---- */
         motor_set(left_pwm, right_pwm);
+        ESP_LOGI(TAG, "motor set with L: %d, R: %d", left_pwm, right_pwm);
 
         prev_state = new_state;
     }

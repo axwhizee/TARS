@@ -37,9 +37,6 @@ esp_err_t motor_init(void)
 {
     if (initialized) return ESP_OK;
 
-    /* 安装 LEDC 渐变服务 (必须先调用) */
-    ledc_fade_func_install(0);
-
     /* ---------- 配置 LEDC 定时器 ---------- */
     ledc_timer_config_t timer_cfg = {
         .speed_mode      = LEDC_LOW_SPEED_MODE,
@@ -89,10 +86,6 @@ esp_err_t motor_init(void)
     ESP_LOGI(TAG, "Motor driver initialized (20kHz, 10-bit, max duty=%d)", MOTOR_MAX_DUTY);
     return ESP_OK;
 }
-
-/* ---------------------------------------------------------- */
-/* 单侧电机控制: IN/IN + Fast Decay                            */
-/* ---------------------------------------------------------- */
 
 /**
  * @brief 设置单个 LEDC 通道占空比并立即生效
@@ -156,10 +149,7 @@ esp_err_t motor_set(int16_t left, int16_t right)
     return ESP_OK;
 }
 
-/* ---------------------------------------------------------- */
-/* 制动 & 滑行                                                   */
-/* ---------------------------------------------------------- */
-
+/* 制动 */
 void motor_brake(void)
 {
     if (!initialized) return;
@@ -174,6 +164,7 @@ void motor_brake(void)
     ledc_duty_apply(RIGHT_IN2_CHANNEL, full);
 }
 
+/* 滑行 */
 void motor_coast(void)
 {
     if (!initialized) return;
@@ -185,16 +176,16 @@ void motor_coast(void)
     ledc_duty_apply(RIGHT_IN2_CHANNEL, 0);
 }
 
-void motor_deinit(void)
-{
-    if (!initialized) return;
+// void motor_deinit(void)
+// {
+//     if (!initialized) return;
 
-    motor_coast();
+//     motor_coast();
 
-    ledc_stop(LEDC_LOW_SPEED_MODE, LEFT_IN1_CHANNEL,  0);
-    ledc_stop(LEDC_LOW_SPEED_MODE, LEFT_IN2_CHANNEL,  0);
-    ledc_stop(LEDC_LOW_SPEED_MODE, RIGHT_IN1_CHANNEL, 0);
-    ledc_stop(LEDC_LOW_SPEED_MODE, RIGHT_IN2_CHANNEL, 0);
+//     ledc_stop(LEDC_LOW_SPEED_MODE, LEFT_IN1_CHANNEL,  0);
+//     ledc_stop(LEDC_LOW_SPEED_MODE, LEFT_IN2_CHANNEL,  0);
+//     ledc_stop(LEDC_LOW_SPEED_MODE, RIGHT_IN1_CHANNEL, 0);
+//     ledc_stop(LEDC_LOW_SPEED_MODE, RIGHT_IN2_CHANNEL, 0);
 
-    initialized = false;
-}
+//     initialized = false;
+// }

@@ -4,6 +4,9 @@
  */
 #pragma once
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/event_groups.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -18,7 +21,7 @@
 
 #define BIT_LIDAR_READY       (1 << 0) /* APF 任务的 lidar 数据就绪位 */
 
-/*
+/**
  * vector_polar_t — 带显式角度的输出结构 (公用数据类型)
  * angle_deg: 传感器正前方为 0°, 顺时针递增 (LD14P 原生坐标系)
  */
@@ -32,6 +35,12 @@ typedef struct {
     float x;
     float y;
 } vector_cart_t;
+
+/* ---------- RTOS 全局句柄 (定义在 main.c, extern 供所有任务引用) ---------- */
+
+extern QueueHandle_t      g_q_polar;  /* LiDAR → APF: 极坐标数据队列 (LIDAR_SECTORS 深度) */
+extern QueueHandle_t      g_q_cart;   /* APF/测试 → Motor: 笛卡尔指令队列 (MOTOR_CMD_QUEUE_DEPTH 深度) */
+extern EventGroupHandle_t g_eg_sync;  /* LiDAR → APF: 事件组 (BIT_LIDAR_READY) */
 
 /* ---------- UART 硬件配置 ---------- */
 
@@ -62,15 +71,26 @@ typedef struct {
 
 /* ---------- 电机控制参数 ---------- */
 
-#define MOTOR_EMA_ALPHA        0.3f     /* EMA 平滑因子 (0~1, 越小越平滑, 越大响应越快) */
-#define MOTOR_DECAY_FACTOR     0.9f     /* 指令超时后的衰减因子 (每个周期乘以此系数向零衰减) */
-#define MOTOR_DEADZONE_MM      50.0f    /* 笛卡尔死区 (mm), 小于此值视为零指令 */
-#define MOTOR_TURN_THRESHOLD   0.08f    /* |angular/linear| 超过此阈值进入转向状态 */
-#define MOTOR_TURN_RATIO       0.7f     /* 差速转向中角分量的灵敏度权重 */
-#define MOTOR_DEADTIME_MS      20       /* 换向死区制动保持时长 (ms), 防止电流冲击 */
-#define MOTOR_CMD_QUEUE_DEPTH  4        /* 笛卡尔指令队列深度 */
-#define MOTOR_TASK_STACK       4096     /* 电机控制任务栈大小 (words) */
-#define MOTOR_TASK_PRIO        2        /* 电机控制任务优先级 */
+#define MOTOR_CTL_HZ            8       /* 电机控制任务运行频率 (Hz) */
+#define MOTOR_CTL_PERIOD_MS     (1000 / MOTOR_CTL_HZ)  /* 125ms */
+
+/*
+ * EMA 时间常数 τ = 300ms, 控制平滑收敛速度
+ * α = 1 - exp(-dt/τ) = 1 - exp(-125/300) ≈ 0.34
+ * 若改为 16Hz (dt=62.5ms): α = 1 - exp(-62.5/300) ≈ 0.19
+ */
+#define MOTOR_EMA_TC_MS         150.0f
+#define MOTOR_EMA_ALPHA         0.34f   /* α = 1 - exp(-MOTOR_CTL_PERIOD_MS / MOTOR_EMA_TC_MS) */
+
+#define MOTOR_INPUT_TIMEOUT_MS  1000    /* 上游断流超过 1s → 目标归零, 自然停车 */
+
+#define MOTOR_DEADZONE_MM       50.0f   /* 笛卡尔死区 (mm), 小于此值视为零指令 */
+#define MOTOR_TURN_THRESHOLD    0.08f   /* |angular/linear| 超过此阈值进入转向状态 */
+#define MOTOR_TURN_RATIO        0.7f    /* 差速转向中角分量的灵敏度权重 */
+#define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
+#define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
+#define MOTOR_TASK_STACK        4096    /* 电机控制任务栈大小 (words) */
+#define MOTOR_TASK_PRIO         2       /* 电机控制任务优先级 */
 
 /* ---------- APF 人工势场参数 ---------- */
 

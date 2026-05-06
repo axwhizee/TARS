@@ -73,7 +73,7 @@ static inline float repulse_weight(float r)
 
 void apf_task(void *pvParameters)
 {
-    apf_task_params_t *params = (apf_task_params_t *)pvParameters;
+    (void)pvParameters;
     vector_polar_t point;
     vector_cart_t   result;
 
@@ -100,7 +100,7 @@ void apf_task(void *pvParameters)
         /* 1. 等待 LiDAR 数据就绪信号 (1s 超时)          */
         /* ============================================ */
         EventBits_t bits = xEventGroupWaitBits(
-            params->eg_sync,
+            g_eg_sync,
             BIT_LIDAR_READY,
             pdTRUE,    /* 读取后自动清零 */
             pdFALSE,   /* 任意一位即可 (这里只有 1 位) */
@@ -111,7 +111,7 @@ void apf_task(void *pvParameters)
             /* 超时: 推送零指令停止机器人 */
             result.x = 0.0f;
             result.y = 0.0f;
-            xQueueOverwrite(params->q_cart, &result);
+            xQueueOverwrite(g_q_cart, &result);
             continue;
         }
 
@@ -126,7 +126,7 @@ void apf_task(void *pvParameters)
 
         for (int i = 0; i < LIDAR_SECTORS; i++) {
             /* 使用阻塞接收 (数据已在队列中, 应立即返回) */
-            if (xQueueReceive(params->q_polar, &point, pdMS_TO_TICKS(50)) != pdTRUE) {
+            if (xQueueReceive(g_q_polar, &point, pdMS_TO_TICKS(50)) != pdTRUE) {
                 ESP_LOGW(TAG, "q_polar underflow: got %d/%d points", i, LIDAR_SECTORS);
                 break;
             }
@@ -206,10 +206,7 @@ void apf_task(void *pvParameters)
         /* ============================================ */
         result.x = total_fx;
         result.y = total_fy;
-
-        if (xQueueOverwrite(params->q_cart, &result) != pdPASS) {
-            xQueueSend(params->q_cart, &result, 0);
-        }
+        xQueueOverwrite(g_q_cart, &result);
 
         ESP_LOGD(TAG, "APF: F=(%.0f,%.0f) | danger=%d safe=%d noise=%d",
                  (double)total_fx, (double)total_fy,
