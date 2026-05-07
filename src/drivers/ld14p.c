@@ -15,7 +15,7 @@
 #include "esp_log.h"
 #include <string.h>
 
-static const char *TAG = "LD14P";
+static const char *TAG = "LD14P ";
 
 #define HEADER           0x54
 #define FRAME_LEN        47
@@ -56,8 +56,7 @@ static const uint8_t CRC_TABLE[256] = {
     0x5a, 0x06, 0x4b, 0x9c, 0xd1, 0x7f, 0x32, 0xe5, 0xa8
 };
 
-static uint8_t crc8_calc(const uint8_t *data, uint8_t len)
-{
+static uint8_t crc8_calc(const uint8_t *data, uint8_t len) {
     uint8_t crc = 0x00;
     for (uint8_t i = 0; i < len; i++)
         crc = CRC_TABLE[(crc ^ data[i]) & 0xFF];
@@ -73,8 +72,7 @@ static volatile bool revolution_flag;                    /* 圈完成, 单次消
 
 /* ────────── ld14p_feed_byte — 字节级状态机 ────────── */
 
-const ld14p_frame_t *ld14p_feed_byte(uint8_t byte)
-{
+const ld14p_frame_t *ld14p_feed_byte(uint8_t byte) {
     typedef enum { S_IDLE, S_FRAME } state_t;
     static state_t state = S_IDLE;
     static uint8_t buf[FRAME_LEN];
@@ -107,8 +105,7 @@ const ld14p_frame_t *ld14p_feed_byte(uint8_t byte)
 
 /* ────────── ld14p_process_frame — 角度插值 + 圈检测 ────────── */
 
-bool ld14p_process_frame(const ld14p_frame_t *frm)
-{
+bool ld14p_process_frame(const ld14p_frame_t *frm) {
     /*
      * 圈检测: 角度 >300°→<60° 即穿过 0° 线, 配合 150ms 防抖.
      * 注意: revolution_flag 在本帧置位, 但 cloud_360 中的点已由前面的帧填满.
@@ -122,7 +119,7 @@ bool ld14p_process_frame(const ld14p_frame_t *frm)
     prev_start_angle = frm->start_angle;
 
     /* 角度插值: 12 点在 start_angle~end_angle 间等间隔分布 */
-    int16_t diff = frm->end_angle - frm->start_angle;
+    int diff = (int)frm->end_angle - (int)frm->start_angle;
     if (diff < 0) diff += 360 * ANGLE_RES;               /* 跨 0° 补偿 */
     float step = (float)diff / (LD14P_POINTS_PER_PACK - 1);
 
@@ -142,8 +139,7 @@ bool ld14p_process_frame(const ld14p_frame_t *frm)
 
 /* ────────── ld14p_get_cloud — 快照 → vector_polar_t[360] ────────── */
 
-uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV])
-{
+uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV]) {
     uint32_t valid = 0;
     for (int i = 0; i < LD14P_POINTS_PER_REV; i++) {
         out[i].angle_deg   = (float)i;
@@ -155,21 +151,19 @@ uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV])
 
 /* ────────── ld14p_init ────────── */
 
-static void send_freq_command(uint8_t freq_hz)
-{
+static void send_freq_command(uint8_t freq_hz) {
     /* 0xA2 命令: 8 字节, CRC 覆盖前 7 字节 */
-    uint16_t speed = (uint16_t)freq_hz * 360;
+    uint16_t speed = (uint16_t)LIDAR_FREQ * 360;
     uint8_t cmd[8] = { HEADER, CMD_SPEED, 4,
                        (uint8_t)(speed & 0xFF), (uint8_t)(speed >> 8),
                        0x00, 0x00, 0x00 };
     cmd[7] = crc8_calc(cmd, 7);
     uart_write_bytes(LD14P_UART_NUM, cmd, sizeof(cmd));
-    ESP_LOGI(TAG, "Set freq %d Hz (%d deg/s)", freq_hz, speed);
+    ESP_LOGI(TAG, "LD14P set freq @ %d Hz (%d deg/s)", LIDAR_FREQ, speed);
 }
 
-esp_err_t ld14p_init(uint8_t freq_hz)
-{
-    if (freq_hz < 2 || freq_hz > 8) return ESP_ERR_INVALID_ARG;
+esp_err_t ld14p_init() {
+    if (LIDAR_FREQ < 2 || LIDAR_FREQ > 8) return ESP_ERR_INVALID_ARG;
 
     memset(cloud_360, 0xFF, sizeof(cloud_360));   /* 0xFFFF = 未填充 */
     prev_start_angle = 0;
@@ -202,9 +196,9 @@ esp_err_t ld14p_init(uint8_t freq_hz)
 
     /* 等 UART 稳定 → 发速率命令 → 等电机响应 */
     vTaskDelay(pdMS_TO_TICKS(100));
-    send_freq_command(freq_hz);
+    send_freq_command(LIDAR_FREQ);
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    ESP_LOGI(TAG, "LD14P ready on UART1 (TX:17 RX:18) @ %d Hz", freq_hz);
+    ESP_LOGI(TAG, "LD14P initialized (UART1 TX:17 RX:18) @ %d Hz", LIDAR_FREQ);
     return ESP_OK;
 }

@@ -124,8 +124,7 @@ static motor_state_t motor_clamp_classify(float x, float y)
  * @param right_pwm [out] 右轮 PWM 占空比
  */
 static void motor_diff_to_pwm(float x, float y, motor_state_t state,
-                              int16_t *left_pwm, int16_t *right_pwm)
-{
+                              int16_t *left_pwm, int16_t *right_pwm) {
     float linear  = x / 6000.0f;
     float angular = y / 6000.0f * MOTOR_TURN_RATIO;
 
@@ -150,8 +149,7 @@ static void motor_diff_to_pwm(float x, float y, motor_state_t state,
 }
 
 /* 换向死区判断 (工具) */
-static bool is_direction_reversal(motor_state_t prev, motor_state_t next)
-{
+static bool is_direction_reversal(motor_state_t prev, motor_state_t next) {
     if (prev == next || prev == MOTOR_STATE_IDLE || next == MOTOR_STATE_IDLE) {
         return false;
     }
@@ -166,8 +164,7 @@ static bool is_direction_reversal(motor_state_t prev, motor_state_t next)
 /* 任务主体: 8Hz 固定周期                                       */
 /* ---------------------------------------------------------- */
 
-void motor_task(void *pvParameters)
-{
+void motor_task(void *pvParameters) {
     (void)pvParameters;
 
     /* EMA 滤波器状态 */
@@ -185,7 +182,7 @@ void motor_task(void *pvParameters)
     /* 固定周期调度 */
     TickType_t wake_time = xTaskGetTickCount();
 
-    ESP_LOGI(TAG, "Motor control started: %dHz (period=%ums) alpha=%.3f tau=%.0fms",
+    ESP_LOGI(TAG, "Motor task started @ %dHz (period=%ums), alpha=%.3f tau=%.0fms",
              MOTOR_CTL_HZ, MOTOR_CTL_PERIOD_MS,
              (double)MOTOR_EMA_ALPHA, (double)MOTOR_EMA_TC_MS);
 
@@ -196,6 +193,7 @@ void motor_task(void *pvParameters)
         vector_cart_t cmd;
         const vector_cart_t *pcmd = NULL;
         if (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) {
+            ESP_LOGD(TAG, "Vector_cart RECEIVED (%.0f, %.0f)", (double)cmd.x, (double)cmd.y);
             pcmd = &cmd;
         }
 
@@ -208,8 +206,8 @@ void motor_task(void *pvParameters)
 
         /* ---- Step 3: 换向死区保护 ---- */
         if (is_direction_reversal(prev_state, new_state)) {
-            ESP_LOGD(TAG, "Reversal %d→%d, dead-time %dms",
-                     (int)prev_state, (int)new_state, MOTOR_DEADTIME_MS);
+            // ESP_LOGD(TAG, "Reversal %d→%d, dead-time %dms",
+            //          (int)prev_state, (int)new_state, MOTOR_DEADTIME_MS);
             motor_brake();
             vTaskDelay(pdMS_TO_TICKS(MOTOR_DEADTIME_MS));
         }
@@ -219,7 +217,7 @@ void motor_task(void *pvParameters)
 
         /* ---- Step 5: 驱动输出 ---- */
         motor_set(left_pwm, right_pwm);
-        ESP_LOGI(TAG, "motor set with L: %d, R: %d", left_pwm, right_pwm);
+        ESP_LOGI(TAG, "Motor set with (L: %d, R: %d)\n", left_pwm, right_pwm);
 
         prev_state = new_state;
     }

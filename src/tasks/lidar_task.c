@@ -39,8 +39,8 @@ static void lidar_process(const vector_polar_t raw[LD14P_POINTS_PER_REV],
 
         for (int j = 0; j < 10; j++) {
             float d = raw[base + j].distance_mm;
-            if (d < 60000.0f) {     /* 有效点 */
-                float w = 1.0f / (d * d);   /* 反平方权重: 近强远弱 */
+            if (d > 0.0f && d < 60000.0f) {     /* 有效点, d>0 防止 1/d² 除零产生 NaN */
+                float w = 1.0f / (d * d);        /* 反平方权重: 近强远弱 */
                 sum_wx += w * d;
                 sum_w  += w;
             }
@@ -53,7 +53,7 @@ static void lidar_process(const vector_polar_t raw[LD14P_POINTS_PER_REV],
 
 void ld14p_task(void *pvParameters) {
     (void)pvParameters;
-    ESP_LOGI(TAG, "Sensor task started");
+    ESP_LOGI(TAG, "Lidar task started @4Hz");
     uint32_t rev_count = 0;
 
     while (1) {

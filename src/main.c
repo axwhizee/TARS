@@ -30,6 +30,10 @@
 
 static const char *TAG = "MAIN";
 
+/* 全局 RTOS 句柄 (供所有任务模块通过 extern 引用) */
+QueueHandle_t       q_polar;    /* LD14P 数据队列 */
+QueueHandle_t       q_cart;     /* APF 结果队列 (depth=1) */
+EventGroupHandle_t  eg_sync;    /* 传感器同步事件组 */
 /* 心跳 LED 任务 */
 static void vLedTask(void *pvParameters)
 {
@@ -115,34 +119,33 @@ void app_main(void) {
 
     /* 1. 硬件驱动初始化 */
 
-    /* LiDAR 传感器 (待实现) */
-    if (ld14p_init(4) != ESP_OK) {
+    /* LiDAR 传感器驱动 */
+    if (ld14p_init() != ESP_OK) {
         ESP_LOGE(TAG, "LD14P init failed");
         return;
     }
-
     /* 电机 PWM 驱动 */
     if (motor_init() != ESP_OK) {
-        ESP_LOGE(TAG, "Motor driver init failed");
+        ESP_LOGE(TAG, "Motor init failed");
         return;
     }
 
     /* 2. 创建任务间通信对象 (句柄定义在文件顶部) */
 
     /* q_polar: 传感器获取的极坐标数据 */
-    QueueHandle_t q_polar = xQueueCreate(LIDAR_SECTORS, sizeof(vector_polar_t));
+    q_polar = xQueueCreate(LIDAR_SECTORS, sizeof(vector_polar_t));
     if (q_polar == NULL) {
         ESP_LOGE(TAG, "q_polar creation failed");
         return;
     }
     /* q_cart: 用于APF算法计算的笛卡尔坐标数据 */
-    QueueHandle_t q_cart = xQueueCreate(MOTOR_CMD_QUEUE_DEPTH, sizeof(vector_cart_t));
+    q_cart = xQueueCreate(MOTOR_CMD_QUEUE_DEPTH, sizeof(vector_cart_t));
     if (q_cart == NULL) {
         ESP_LOGE(TAG, "q_cart creation failed");
         return;
     }
     /* eg_sync: 用于确保传感器就绪的事件组 */
-    EventGroupHandle_t eg_sync = xEventGroupCreate();
+    eg_sync = xEventGroupCreate();
     if (eg_sync == NULL) {
         ESP_LOGE(TAG, "eg_sync creation failed");
         return;
@@ -154,25 +157,25 @@ void app_main(void) {
     xTaskCreate(vLedTask, "LedTask", 2048, NULL, 1, NULL);
     /* LiDAR 传感器任务 */
     xTaskCreate(ld14p_task, "ld14p_sensor", 8192, NULL, 3, NULL);
-    /* APF 避障任务 (待 LiDAR 测试就绪后启用) */
-    // if (xTaskCreate(apf_task, "apf_task", APF_TASK_STACK, NULL,
-    //                 APF_TASK_PRIO, NULL) != pdPASS) {
-    //     ESP_LOGE(TAG, "APF task creation failed");
-    //     return;
-    // }
+#ifndef DEBUG
+    /* APF 避障任务 (release 模式使用 LiDAR 数据计算避障) */
+    if (xTaskCreate(apf_task, "apf_task", 4096, NULL, 2, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "APF task creation failed");
+        return;
+    }
+#endif
 #ifdef DEBUG
-    /* 测试向量生成任务 (验证电机驱动) */
+    /* 测试向量生成任务 (验证电机驱动, 不与 APF 共存) */
     if (xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL,
-                    3, NULL) != pdPASS) {
+                    4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "TestVector task creation failed");
         return;
     }
 #endif
     /* 电机控制任务 */
-    if (xTaskCreate(motor_task, "motor_task", MOTOR_TASK_STACK, NULL,
-                    MOTOR_TASK_PRIO, NULL) != pdPASS) {
+    if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Motor task creation failed");
         return;
     }
-    ESP_LOGI(TAG, "System started: LedTask + TestVector + MotorTask ready");
+    ESP_LOGI(TAG, "\nLeaving app_main, scheduler to be started\n\n");
 }

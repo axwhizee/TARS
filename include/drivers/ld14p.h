@@ -38,7 +38,7 @@ typedef struct __attribute__((packed)) {
 
 /* ────────── 公开 API ────────── */
 
-esp_err_t ld14p_init(uint8_t freq_hz);
+esp_err_t ld14p_init();
 
 /*
  * ld14p_feed_byte — 喂入一个字节

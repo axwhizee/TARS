@@ -2,7 +2,7 @@
  * @file motor_task.h
  * @brief 电机控制任务 (EMA滤波 + 笛卡尔→差速转换 + 状态机 + 死区管理)
  *
- * 上游任务通过 g_q_cart 队列提供 vector_cart_t (x, y, 单位 mm, 范围 ±6m)
+ * 上游任务通过 q_cart 队列提供 vector_cart_t (x, y, 单位 mm, 范围 ±6m)
  * 本任务完成:
  *   1. EMA 低通滤波 — 平滑笛卡尔分量跳变
  *   2. 笛卡尔 → 差速转换 — 将 (x, y) 映射为左/右轮 PWM 速度

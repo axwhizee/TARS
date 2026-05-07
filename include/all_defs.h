@@ -43,9 +43,10 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 /* ---------- LD14P 数据协议 ---------- */
 
 // #define LD14P_TASK_FREQ       (uint8_t)4
-#define LD14P_POINTS_PER_PACK 12
-#define LD14P_POINTS_PER_REV  360
-#define LIDAR_SECTORS         36       /* 降采样: 每个扇区 10°, 共 36 个输出点 */
+#define LD14P_POINTS_PER_PACK   12
+#define LD14P_POINTS_PER_REV    360
+#define LIDAR_SECTORS           36       /* 降采样: 每个扇区 10°, 共 36 个输出点 */
+#define LIDAR_FREQ              4
 
 /* ---------- UART 硬件配置 ---------- */
 
@@ -88,8 +89,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_TURN_RATIO        0.7f    /* 差速转向中角分量的灵敏度权重 */
 #define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
 #define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
-#define MOTOR_TASK_STACK        4096    /* 电机控制任务栈大小 (words) */
-#define MOTOR_TASK_PRIO         2       /* 电机控制任务优先级 */
 
 /* ---------- APF 人工势场参数 ---------- */
 
@@ -104,5 +103,4 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define APF_MAX_FORCE_MM       6000.0f  /* 合力输出幅值上限 (±6m) */
 #define APF_MIN_FORCE_MM       100.0f   /* 合力输出死区, 小于此值归零 */
 
-#define APF_TASK_STACK         4096     /* APF 任务栈大小 (words) */
-#define APF_TASK_PRIO          3        /* APF 任务优先级 (高于电机, 与LiDAR同级) */
+// #define DEBUG

@@ -18,7 +18,7 @@
 #include "esp_check.h"
 #include <string.h>
 
-static const char *TAG = "MOTOR";
+static const char *TAG = "MOTOR ";
 
 /* ---------------------------------------------------------- */
 /* LEDC 通道映射                                                */
@@ -83,7 +83,7 @@ esp_err_t motor_init(void)
     motor_coast();
 
     initialized = true;
-    ESP_LOGI(TAG, "Motor driver initialized (20kHz, 10-bit, max duty=%d)", MOTOR_MAX_DUTY);
+    ESP_LOGI(TAG, "Motor initialized (20kHz, 10-bit, max duty=%d)", MOTOR_MAX_DUTY);
     return ESP_OK;
 }
 
