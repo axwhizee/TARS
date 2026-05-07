@@ -15,7 +15,6 @@
  *   滑行: IN1=0,   IN2=0  (Hi-Z coast)
  */
 #pragma once
-
 #include "all_defs.h"
 
 #ifdef __cplusplus

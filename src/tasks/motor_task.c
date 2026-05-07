@@ -6,7 +6,7 @@
  *   以固定 8Hz (125ms) 周期运行, 配合 4Hz 传感器实现帧间 EMA 插值平滑.
  *
  *   主循环:
- *     g_q_cart ──非阻塞接收──▶ motor_cmd_to_ema()     → ema_x/y
+ *     q_cart ──非阻塞接收──▶ motor_cmd_to_ema()     → ema_x/y
  *                              motor_clamp_classify()  → state
  *                              motor_diff_to_pwm()     → left/right pwm
  *                              motor_set()
@@ -195,7 +195,7 @@ void motor_task(void *pvParameters)
         /* ---- 非阻塞取指令 ---- */
         vector_cart_t cmd;
         const vector_cart_t *pcmd = NULL;
-        if (xQueueReceive(g_q_cart, &cmd, 0) == pdTRUE) {
+        if (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) {
             pcmd = &cmd;
         }
 
