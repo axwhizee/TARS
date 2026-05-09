@@ -177,5 +177,5 @@ void app_main(void) {
         ESP_LOGE(TAG, "Motor task creation failed");
         return;
     }
-    ESP_LOGI(TAG, "\nLeaving app_main, scheduler to be started\n\n");
+    ESP_LOGI(TAG, "\n----------Leaving app_main, scheduler to be started----------\n\n");
 }

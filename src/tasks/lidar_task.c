@@ -1,5 +1,6 @@
-/*
- * lidar_task.c — LD14P 传感器任务
+/**
+ * @file lidar_task.c
+ * @brief LD14P 传感器任务
  *
  * 数据流:
  *   UART1 → ld14p_feed_byte(byte)  → ld14p_frame_t*
@@ -22,8 +23,8 @@
 
 static const char *TAG = "LIDAR_TASK";
 
-/*
- * lidar_process — 360 点 → 36 扇区降采样 (最小距离加权平均)
+/**
+ * @brief lidar_process — 360 点 → 36 扇区降采样 (最小距离加权平均)
  *
  * 将 360 个原始点按 10° 间隔划分为 36 个扇区 (0°~9°, 10°~19°, ...).
  * 每扇区内用 1/d² 加权平均: 距离越近的点权重越大, 障碍物信号被强化.

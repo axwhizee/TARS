@@ -25,29 +25,36 @@
 #include "esp_log.h"
 #include <math.h>
 
+
 static const char *TAG = "MOTOR_TASK";
+
+// EMA滤波器状态结构
+typedef struct {
+    float ema_x, ema_y;      // 当前滤波值
+    float target_x, target_y; // 目标值（指令或零）
+    TickType_t last_update;   // 最后收到指令的时刻
+} ema_filter_t;
 
 /**
  * @brief 将上游 raw cmd 注入 EMA 滤波器, 输出平滑后的笛卡尔分量
  *
- * @param cmd     新指令指针 (NULL 表示本周期无新指令)
- * @param ema_x   [in/out] x 分量 EMA 状态
- * @param ema_y   [in/out] y 分量 EMA 状态
- * @param target_x [in/out] EMA 目标 (有指令时更新, 超时时归零)
- * @param target_y [in/out] 同上
+ * @param cmd       新指令指针 (NULL 表示本周期无新指令)
+ * @param ema_x     [in/out] x 分量 EMA 状态
+ * @param ema_y     [in/out] y 分量 EMA 状态
+ * @param target_x  [in/out] EMA 目标 (有指令时更新, 超时时归零)
+ * @param target_y  [in/out] 同上
  * @param last_tick [in/out] 最后收到指令的时刻 (tick count)
  *
- * 行为:
- *   - 有 cmd → 更新 target = cmd.xy, 记录时间戳
- *   - 无 cmd 且距上次 > 1s → target → 0 (安全停车)
- *   - 每周期: ema = α·target + (1-α)·ema
- *   - 钳位到 ±6m
+ *  有 cmd → 更新 target = cmd.xy, 记录时间戳
+ *  无 cmd 且距上次 > 1s → target → 0 (安全停车)
+ *  每周期: ema = α·target + (1-α)·ema
+ *  钳位到 ±6m
  */
 static void motor_cmd_to_ema(const vector_cart_t *cmd,
-                             float *ema_x, float *ema_y,
-                             float *target_x, float *target_y,
-                             TickType_t *last_tick)
-{
+        float *ema_x, float *ema_y,
+        float *target_x, float *target_y,
+        TickType_t *last_tick
+        ) {
     TickType_t now = xTaskGetTickCount();
 
     if (cmd != NULL) {
@@ -160,10 +167,6 @@ static bool is_direction_reversal(motor_state_t prev, motor_state_t next) {
     return (prev_fwd != next_fwd);
 }
 
-/* ---------------------------------------------------------- */
-/* 任务主体: 8Hz 固定周期                                       */
-/* ---------------------------------------------------------- */
-
 void motor_task(void *pvParameters) {
     (void)pvParameters;
 
@@ -175,12 +178,8 @@ void motor_task(void *pvParameters) {
     /* 状态机 */
     motor_state_t prev_state = MOTOR_STATE_IDLE;
     motor_state_t new_state;
-
-    /* PWM 输出 */
-    int16_t left_pwm, right_pwm;
-
-    /* 固定周期调度 */
-    TickType_t wake_time = xTaskGetTickCount();
+    int16_t left_pwm, right_pwm;    // PWM 输出
+    TickType_t wake_time = xTaskGetTickCount();     // 固定周期调度
 
     ESP_LOGI(TAG, "Motor task started @ %dHz (period=%ums), alpha=%.3f tau=%.0fms",
              MOTOR_CTL_HZ, MOTOR_CTL_PERIOD_MS,
@@ -198,8 +197,7 @@ void motor_task(void *pvParameters) {
         }
 
         /* ---- Step 1: 指令→EMA 滤波 ---- */
-        motor_cmd_to_ema(pcmd, &ema_x, &ema_y,
-                         &tgt_x, &tgt_y, &last_cmd_tick);
+        motor_cmd_to_ema(pcmd, &ema_x, &ema_y, &tgt_x, &tgt_y, &last_cmd_tick);
 
         /* ---- Step 2: 钳位 + 状态分类 ---- */
         new_state = motor_clamp_classify(ema_x, ema_y);

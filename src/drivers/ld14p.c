@@ -1,5 +1,6 @@
-/*
- * ld14p.c — LD14P 激光雷达底层驱动
+/**
+ * @file ld14p.c
+ * @brief LD14P 激光雷达底层驱动
  *
  * 关键设计:
  *   - ld14p_frame_t packed 结构体直接映射 47 字节线格式 (ESP32 LE = LSB-first)

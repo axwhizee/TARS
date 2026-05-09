@@ -48,8 +48,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define LIDAR_SECTORS           36       /* 降采样: 每个扇区 10°, 共 36 个输出点 */
 #define LIDAR_FREQ              4
 
-/* ---------- UART 硬件配置 ---------- */
-
 #define LD14P_UART_NUM       UART_NUM_1
 #define LD14P_UART_BAUD      115200
 #define LD14P_UART_TX_PIN    17 // <-> R <-> RX
@@ -57,6 +55,19 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define LD14P_UART_RX_BUF    2048
 
 // LD14P：1(R)->RX, 2(B)->GND, 3(Y)->TX, 4(G)->VCC
+
+/* ---------- APF 人工势场参数 ---------- */
+
+#define APF_SAFE_RANGE_MM      6000.0f  /* 安全感知范围 (6m), 超出视为噪声 */
+#define APF_DANGER_RANGE_MM    1000.0f  /* 危险区阈值 (2m) */
+#define APF_PERCEPTION_MIN_MM  100.0f   /* 最小感知距离 (避免自身/地面对 1/r² 的无穷大) */
+#define APF_MAX_FORCE_MM       6000.0f  /* 合力输出幅值上限 (±6m) */
+#define APF_MIN_FORCE_MM       100.0f   /* 合力输出死区, 小于此值归零 */
+
+#define APF_ATTRACT_GAIN       1500.0f  /* 引力增益 (K_att), 产生向前的恒定拉力 */
+#define APF_REPULSE_GAIN       8000.0f  /* 斥力增益 (K_rep) */
+#define APF_DANGER_REPULSE_WT  2.5f     /* 危险区斥力权重倍率 (0-2m) */
+#define APF_SAFE_REPULSE_WT    1.0f     /* 感知区斥力权重倍率 (2-6m) */
 
 /* ---------- 电机驱动硬件配置 ---------- */
 
@@ -69,12 +80,10 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_PWM_RES_BITS     10       /* 10-bit 分辨率 (0-1023) */
 #define MOTOR_MAX_DUTY         (((1U << MOTOR_PWM_RES_BITS) - 1) * 80U / 100U) /* 80% = 818 */
 
-/* ---------- 电机控制参数 ---------- */
-
 #define MOTOR_CTL_HZ            8       /* 电机控制任务运行频率 (Hz) */
 #define MOTOR_CTL_PERIOD_MS     (1000 / MOTOR_CTL_HZ)  /* 125ms */
 
-/*
+/**
  * EMA 时间常数 τ = 300ms, 控制平滑收敛速度
  * α = 1 - exp(-dt/τ) = 1 - exp(-125/300) ≈ 0.34
  * 若改为 16Hz (dt=62.5ms): α = 1 - exp(-62.5/300) ≈ 0.19
@@ -89,18 +98,5 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_TURN_RATIO        0.7f    /* 差速转向中角分量的灵敏度权重 */
 #define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
 #define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
-
-/* ---------- APF 人工势场参数 ---------- */
-
-#define APF_SAFE_RANGE_MM      6000.0f  /* 安全感知范围 (6m), 超出视为噪声 */
-#define APF_DANGER_RANGE_MM    2000.0f  /* 危险区阈值 (2m) */
-#define APF_PERCEPTION_MIN_MM  100.0f   /* 最小感知距离 (避免自身/地面对 1/r² 的无穷大) */
-
-#define APF_ATTRACT_GAIN       1500.0f  /* 引力增益 (K_att), 产生向前的恒定拉力 */
-#define APF_REPULSE_GAIN       8000.0f  /* 斥力增益 (K_rep) */
-#define APF_DANGER_REPULSE_WT  2.5f     /* 危险区斥力权重倍率 (0-2m) */
-#define APF_SAFE_REPULSE_WT    1.0f     /* 感知区斥力权重倍率 (2-6m) */
-#define APF_MAX_FORCE_MM       6000.0f  /* 合力输出幅值上限 (±6m) */
-#define APF_MIN_FORCE_MM       100.0f   /* 合力输出死区, 小于此值归零 */
 
 // #define DEBUG

@@ -33,8 +33,54 @@ static const char *TAG = "MOTOR ";
 
 static bool initialized = false;
 
-esp_err_t motor_init(void)
-{
+/**
+ * @brief 设置单个 LEDC 通道占空比并立即生效
+ */
+static inline void ledc_duty_apply(ledc_channel_t channel, uint32_t duty) {
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, channel, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, channel);
+}
+
+/**
+ * @brief 控制单侧电机的 IN1/IN2 信号
+ *
+ * @param in1_ch  IN1 对应的 LEDC 通道
+ * @param in2_ch  IN2 对应的 LEDC 通道
+ * @param speed   有符号速度，正数=前进，负数=后退，零=滑行
+ *                绝对值范围 [0, MOTOR_MAX_DUTY]
+ *
+ * IN/IN 真值表 (Fast Decay):
+ * | speed | IN1  | IN2  | 效果         |
+ * | >0    | PWM  | 0    | 正转 (前进)  |
+ * | <0    | 0    | PWM  | 反转 (后退)  |
+ * | =0    | 0    | 0    | 滑行 (Coast) |
+ */
+static void motor_set_side(ledc_channel_t in1_ch, ledc_channel_t in2_ch,
+                           int16_t speed) {
+    uint32_t duty;
+
+    /* 钳位到允许范围 */
+    if (speed > (int16_t)MOTOR_MAX_DUTY)  speed = (int16_t)MOTOR_MAX_DUTY;
+    if (speed < -(int16_t)MOTOR_MAX_DUTY) speed = -(int16_t)MOTOR_MAX_DUTY;
+
+    duty = (uint32_t)(speed < 0 ? -speed : speed);
+
+    if (speed > 0) {
+        /* 正转: IN1 = PWM, IN2 = 0 */
+        ledc_duty_apply(in1_ch, duty);
+        ledc_duty_apply(in2_ch, 0);
+    } else if (speed < 0) {
+        /* 反转: IN1 = 0, IN2 = PWM */
+        ledc_duty_apply(in1_ch, 0);
+        ledc_duty_apply(in2_ch, duty);
+    } else {
+        /* 滑行: IN1 = 0, IN2 = 0 */
+        ledc_duty_apply(in1_ch, 0);
+        ledc_duty_apply(in2_ch, 0);
+    }
+}
+
+esp_err_t motor_init(void) {
     if (initialized) return ESP_OK;
 
     /* ---------- 配置 LEDC 定时器 ---------- */
@@ -87,57 +133,7 @@ esp_err_t motor_init(void)
     return ESP_OK;
 }
 
-/**
- * @brief 设置单个 LEDC 通道占空比并立即生效
- */
-static inline void ledc_duty_apply(ledc_channel_t channel, uint32_t duty)
-{
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, channel, duty);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, channel);
-}
-
-/**
- * @brief 控制单侧电机的 IN1/IN2 信号
- *
- * @param in1_ch  IN1 对应的 LEDC 通道
- * @param in2_ch  IN2 对应的 LEDC 通道
- * @param speed   有符号速度，正数=前进，负数=后退，零=滑行
- *                绝对值范围 [0, MOTOR_MAX_DUTY]
- *
- * IN/IN 真值表 (Fast Decay):
- * | speed | IN1  | IN2  | 效果         |
- * | >0    | PWM  | 0    | 正转 (前进)  |
- * | <0    | 0    | PWM  | 反转 (后退)  |
- * | =0    | 0    | 0    | 滑行 (Coast) |
- */
-static void motor_set_side(ledc_channel_t in1_ch, ledc_channel_t in2_ch,
-                           int16_t speed)
-{
-    uint32_t duty;
-
-    /* 钳位到允许范围 */
-    if (speed > (int16_t)MOTOR_MAX_DUTY)  speed = (int16_t)MOTOR_MAX_DUTY;
-    if (speed < -(int16_t)MOTOR_MAX_DUTY) speed = -(int16_t)MOTOR_MAX_DUTY;
-
-    duty = (uint32_t)(speed < 0 ? -speed : speed);
-
-    if (speed > 0) {
-        /* 正转: IN1 = PWM, IN2 = 0 */
-        ledc_duty_apply(in1_ch, duty);
-        ledc_duty_apply(in2_ch, 0);
-    } else if (speed < 0) {
-        /* 反转: IN1 = 0, IN2 = PWM */
-        ledc_duty_apply(in1_ch, 0);
-        ledc_duty_apply(in2_ch, duty);
-    } else {
-        /* 滑行: IN1 = 0, IN2 = 0 */
-        ledc_duty_apply(in1_ch, 0);
-        ledc_duty_apply(in2_ch, 0);
-    }
-}
-
-esp_err_t motor_set(int16_t left, int16_t right)
-{
+esp_err_t motor_set(int16_t left, int16_t right) {
     if (!initialized) {
         ESP_LOGE(TAG, "Motor not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -150,8 +146,7 @@ esp_err_t motor_set(int16_t left, int16_t right)
 }
 
 /* 制动 */
-void motor_brake(void)
-{
+void motor_brake(void) {
     if (!initialized) return;
 
     /* 制动: IN1=HIGH, IN2=HIGH → 两路低侧 FET 导通 → 电机绕组短接
@@ -165,8 +160,7 @@ void motor_brake(void)
 }
 
 /* 滑行 */
-void motor_coast(void)
-{
+void motor_coast(void) {
     if (!initialized) return;
 
     /* 滑行: 全部通道占空比 0 → Hi-Z */
