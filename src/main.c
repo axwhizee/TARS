@@ -27,12 +27,15 @@
 #include "tasks/apf_task.h"
 #include "drivers/ld14p.h"
 #include "tasks/lidar_task.h"
+#include "drivers/ds18b20.h"
+#include "tasks/temp_task.h"
 
 static const char *TAG = "MAIN";
 
 /* 全局 RTOS 句柄 (供所有任务模块通过 extern 引用) */
 QueueHandle_t       q_polar;    /* LD14P 数据队列 */
 QueueHandle_t       q_cart;     /* APF 结果队列 (depth=1) */
+QueueHandle_t       q_temp;     /* DS18B20 温度数据队列 */
 EventGroupHandle_t  eg_sync;    /* 传感器同步事件组 */
 /* 心跳 LED 任务 */
 static void vLedTask(void *pvParameters)
@@ -129,6 +132,10 @@ void app_main(void) {
         ESP_LOGE(TAG, "Motor init failed");
         return;
     }
+    /* DS18B20 温度传感器 */
+    if (ds18b20_init() != ESP_OK) {
+        ESP_LOGW(TAG, "DS18B20 init failed, temperature task will retry");
+    }
 
     /* 2. 创建任务间通信对象 (句柄定义在文件顶部) */
 
@@ -144,6 +151,12 @@ void app_main(void) {
         ESP_LOGE(TAG, "q_cart creation failed");
         return;
     }
+    /* q_temp: DS18B20 温度数据队列 (depth=4, 1s 缓冲) */
+    q_temp = xQueueCreate(4, sizeof(float));
+    if (q_temp == NULL) {
+        ESP_LOGE(TAG, "q_temp creation failed");
+        return;
+    }
     /* eg_sync: 用于确保传感器就绪的事件组 */
     eg_sync = xEventGroupCreate();
     if (eg_sync == NULL) {
@@ -157,6 +170,8 @@ void app_main(void) {
     xTaskCreate(vLedTask, "LedTask", 2048, NULL, 1, NULL);
     /* LiDAR 传感器任务 */
     xTaskCreate(ld14p_task, "ld14p_sensor", 8192, NULL, 3, NULL);
+    /* DS18B20 温度传感器任务 */
+    xTaskCreate(temp_task, "temp_sensor", 2048, NULL, 2, NULL);
 #ifndef DEBUG
     /* APF 避障任务 (release 模式使用 LiDAR 数据计算避障) */
     if (xTaskCreate(apf_task, "apf_task", 4096, NULL, 2, NULL) != pdPASS) {

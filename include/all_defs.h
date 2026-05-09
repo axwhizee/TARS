@@ -30,11 +30,13 @@ typedef struct {
 
 extern QueueHandle_t        q_polar;    /* LD14P 数据队列 */
 extern QueueHandle_t        q_cart;     /* APF 计算结果队列，深度 1 */
+extern QueueHandle_t        q_temp;     /* DS18B20 温度数据队列 */
 extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 任务间同步 ---------- */
 
 #define BIT_LIDAR_READY       (1 << 0) /* APF 任务的 lidar 数据就绪位 */
+#define BIT_TEMP_READY        (1 << 1) /* DS18B20 温度数据就绪位 */
 
 /* ---------- 板级硬件配置 ---------- */
 
@@ -55,6 +57,12 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define LD14P_UART_RX_BUF    2048
 
 // LD14P：1(R)->RX, 2(B)->GND, 3(Y)->TX, 4(G)->VCC
+
+/* ---------- DS18B20 温度传感器 ---------- */
+
+#define DS18B20_GPIO_PIN      9       /* DQ 数据线 (1-Wire) */
+#define DS18B20_RES_BITS      10      /* 10-bit 精度 (0.25°C, 188ms 转换), 支持 4Hz */
+#define DS18B20_TASK_FREQ     4       /* 采样频率 (Hz) */
 
 /* ---------- APF 人工势场参数 ---------- */
 

@@ -201,34 +201,32 @@ if (xQueueReceive(vector_queue, &vec, pdMS_TO_TICKS(100)) == pdTRUE) {
 
 #### ESP32-S3
 
-2. [基于ESP32的简单热成像仪](https://github.com/netzbasteln/MLX90640-Thermocam)
-4. [基于ESP32包含Web通信的热成像](https://github.com/Samox1/ESP_Thermal_Camera_WebServer)
-3. [基于STM32的OpenTemp热成像](https://github.com/RoboticWorx/OpenTemp)
-5. [简单的智能循迹小车](https://github.com/xcstudio715/stmcar)
-7. [适用于ESP-IDF的HC-SR04驱动](https://github.com/ESP32Tutorials/HC-SR04-Ultrasonic-Sensor-with-ESP32-ESP-IDF)
-8. [适用于STM32的HC-SR04驱动](https://github.com/lukdut/HC-SR04-Stm32)
-6. [VL53L0X模块](https://github.com/bitbank2/VL53L0X)
-9. [同型号参考：ESP32-S3智能语音助手](https://zhuanlan.zhihu.com/p/29817835305)
+1. [简单的智能循迹小车](https://github.com/xcstudio715/stmcar)
+2. [同型号参考：ESP32-S3智能语音助手](https://zhuanlan.zhihu.com/p/29817835305)
+3. [ESP-DSP文档](https://docs.espressif.com/projects/esp-dsp/)
+4. [ESP-NN文档](https://github.com/espressif/esp-nn)
+5. [ESP-NN库](https://components.espressif.com/components/espressif/esp-nn/versions/1.2.1/readme?language=en)
 
+<!-- 
 #### MLX90640
 
 1. [MLX90640-C语言库](https://github.com/melexis/mlx90640-library)
+ -->
+
+#### DS18B20
+
+1. [DS18B20中文手册](http://file.yfrobot.com.cn/datasheet/DS18B20%E4%B8%AD%E6%96%87%E6%89%8B%E5%86%8C.pdf)
+2. [DS18B20数据手册](https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf)
 
 #### LD14P
 
 1. [LD14P简单教程](https://blog.kaia.ai/tutorial-connect-ld14p-lidar/)
 4. [LD14P-ESPIDF实践](https://jishuzhan.net/article/2033076476967452674)
 5. [LD14P官方SDK](https://github.com/ldrobotSensorTeam/ldlidar_sl_sdk/tree/master)
+4. [乐动LD14P激光传感器开发手册](https://files.waveshare.com/upload/9/99/LD14P_Development_Manual.pdf)
+5. [乐动LD14P激光传感器数据手册](https://www.ldrobot.com/images/2023/03/02/LDROBOT_LD14P%20DataSheet_CN_v0.4_Wlmrp6QT.pdf)
 
 #### 电机
 
 1. [DRV8833避坑](https://blog.csdn.net/weixin_27869497/article/details/160731226)
 2. [DRV8833原理图](https://img2020.cnblogs.com/blog/1513524/202009/1513524-20200909142148648-57766702.png)
-
-### 相关文档
-
-1. [ESP-DSP文档](https://docs.espressif.com/projects/esp-dsp/)
-2. [ESP-NN文档](https://github.com/espressif/esp-nn)
-3. [ESP-NN库](https://components.espressif.com/components/espressif/esp-nn/versions/1.2.1/readme?language=en)
-4. [乐动LD14P激光传感器开发手册](https://files.waveshare.com/upload/9/99/LD14P_Development_Manual.pdf)
-5. [乐动LD14P激光传感器数据手册](https://www.ldrobot.com/images/2023/03/02/LDROBOT_LD14P%20DataSheet_CN_v0.4_Wlmrp6QT.pdf)
