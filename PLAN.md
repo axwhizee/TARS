@@ -4,8 +4,8 @@
 
 1. 系统整体规划
 2. 规划完善各模块逻辑
-3. 搭建Python仿真，验证传感器数据处理、APF算法有效性
-4. 联合仿真，验证整个系统是否能够协调运行
+<!-- 3. 搭建Python仿真，验证传感器数据处理、APF算法有效性 -->
+<!-- 4. 联合仿真，验证整个系统是否能够协调运行 -->
 5. 各模块硬件调试实操（逐个模块验证功能，初步联调）
 6. 初步系统功能验证（单一障碍物验证）
 7. 调试调优（优化）
@@ -24,8 +24,8 @@
     * 保守策略：4轮小车，使用 DRV8833 驱动两侧电机，单侧两电机并联
     * ~~激进策略：2轮平衡车，使用PID平衡控制~~
 4. 联网策略：
-    * 支持使用蓝牙进行手动方向控制
-    * 使用Wi-Fi实现态势感知信息传输上传
+    * 使用MQTT协议实时上传激光雷达点云等传感器数据
+    * 利用云端的强大算力与激光雷达的点云数据，实现对场景的实时2D建模
 
 > 使用VL53L0X/激光雷达时若高温物体导致红外被干扰，可以考虑使用960nm滤光板（淘宝收藏有）
 
@@ -182,16 +182,13 @@ if (xQueueReceive(vector_queue, &vec, pdMS_TO_TICKS(100)) == pdTRUE) {
     * 归一化处理，便于后续的差速转换
 2. 将向量序列转化为差速占空比信号
 3. 将差速占空比信号调制到硬件定时器中，实现调制PWM信号直接控制电机
+4. 考虑添加堵转保护机制
 
 ## 参考
 
 ### 论文
 
 *具体的论文参考详见`Reference.md`中的总结*
-
-1. [移动机器人路径规划算法综述](https://kns.cnki.net/kcms2/article/abstract?v=FCWB7knoBeRTTSU6yw2v3kGechSXn-tZdRJ5HJy2vWIYwHoRWls9eHST7SBQ6t_37aOiJ2ZngA3C4ewjsP87gYgu33QzUdhibACuCUXMYMbLn-w3-8Ej58AJqi4iLp7JDwfChRrkLNQ5uiAOu92-UmWjGcDskJlI0jqQoDI6LWM=&uniplatform=NZKPT)
-2. [基于势场蚁群算法的移动机器人全局路径规划方法](https://kns.cnki.net/kcms2/article/abstract?v=FCWB7knoBeRT8iaGVSXSD3NR-wGxjXaVaimUSm_2Hi01QedHkNx0OTZQFzIOrag9kBLIiM5I20kYTqtVb-U8O5Ps8uIUe79rVGC1wQlzBXZeSHHH2nEq7d6UdeXJGOKCsW46ePL7lG-uL3HEXMq7HlvnIyVc4J0PHSIYPALXBB8=&uniplatform=NZKPT)
-3. [基于A*算法和人工势场法的移动机器人路径规划](https://kns.cnki.net/kcms2/article/abstract?v=FCWB7knoBeRqQyx6AvKZnHZGh_3sckLCWMJKCR9EKMDyVPW9LbXTm-r43rdsFsaMriehx1HIjzueYtHqBMgb6JyWTyHUeBVpDOiZXLKtOG_4skov-vSgrpgHcenYxM9uTi3NnuI5gtBjbqxzYRlWCUOb6b_zPmPQ8JUkcxfuk08=&uniplatform=NZKPT)
 
 ### 代码实践
 
@@ -222,6 +219,11 @@ if (xQueueReceive(vector_queue, &vec, pdMS_TO_TICKS(100)) == pdTRUE) {
 1. [LD14P简单教程](https://blog.kaia.ai/tutorial-connect-ld14p-lidar/)
 4. [LD14P-ESPIDF实践](https://jishuzhan.net/article/2033076476967452674)
 5. [LD14P官方SDK](https://github.com/ldrobotSensorTeam/ldlidar_sl_sdk/tree/master)
+
+#### 电机
+
+1. [DRV8833避坑](https://blog.csdn.net/weixin_27869497/article/details/160731226)
+2. [DRV8833原理图](https://img2020.cnblogs.com/blog/1513524/202009/1513524-20200909142148648-57766702.png)
 
 ### 相关文档
 
