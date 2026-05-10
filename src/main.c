@@ -1,13 +1,7 @@
-/*
- * main.c — ESP32_Template 主入口
- *
- * 启动流程:
- *   1. ld14p_init(4)        — 初始化 UART1 + 发送 0xA2 频率命令
- *   2. 创建 eg_sync + q_polar — 事件组 + 36 深度队列 (vector_polar_t)
- *   3. vLedTask  (prio 1)   — GPIO48 心跳灯
- *   4. ld14p_sensor (prio 3) — 数据读取 → 降采样 → 推送队列
+/**
+ * @file main.c
+ * @brief ESP32_Template 主入口 — 所有硬件初始化 + 任务创建
  */
-
 #include "all_defs.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -15,39 +9,216 @@
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
-// #include "drivers/ld14p.h"
-// #include "tasks/lidar_task.h"
+#include "drivers/motor.h"
+#include "tasks/motor_task.h"
+#include "tasks/apf_task.h"
+#include "drivers/ld14p.h"
+#include "tasks/lidar_task.h"
+#include "drivers/ds18b20.h"
+#include "tasks/temp_task.h"
+#include "tasks/flame_task.h"
+#include "tasks/mqtt_task.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
 
 static const char *TAG = "MAIN";
 
+/* 全局 RTOS 句柄 (供所有任务模块通过 extern 引用) */
+QueueHandle_t       q_polar;    /* LD14P 数据队列 */
+QueueHandle_t       q_cart;     /* APF 结果队列 (depth=1) */
+QueueHandle_t       q_temp;     /* DS18B20 温度数据队列 */
+QueueHandle_t       q_mqtt;     /* MQTT 日志数据队列 (透传 vector_polar_t) */
+EventGroupHandle_t  eg_sync;    /* 传感器同步事件组 */
+/* 心跳 LED 任务 */
 static void vLedTask(void *pvParameters)
 {
+    (void)pvParameters;
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << LED_PIN),
         .mode         = GPIO_MODE_OUTPUT,
     };
     gpio_config(&io_conf);
 
-    for (;;) {
+    while (1) {
         gpio_set_level(LED_PIN, !gpio_get_level(LED_PIN));
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
-void app_main(void)
+#ifdef DEBUG
+/**
+ * @brief 测试阶段定义（临时, 用于验证电机驱动）
+ *
+ * 每个阶段持续 TEST_PHASE_DURATION_MS, 循环发送 vector_cart_t 到 q_cart
+ * EMA 滤波会使电机平滑过渡
+ */
+#define TEST_TICK_MS      250   /* 每个测试周期发送一次指令 */
+#define TEST_PHASE_TICKS  (3000 / TEST_TICK_MS)  /* 每阶段持续 3s = 15 次 */
+
+typedef struct {
+    float x;     /* 前进/后退分量 (mm) */
+    float y;     /* 转向分量 (mm) */
+    const char *desc;
+} test_phase_t;
+
+static const test_phase_t test_seq[] = {
+    { 3000.0f,     0.0f, "Forward"           },
+    { 2000.0f,   800.0f, "Forward-Right"     },
+    { 3000.0f,     0.0f, "Forward"           },
+    {    0.0f,     0.0f, "Stop"              },
+    {-2000.0f,     0.0f, "Reverse"           },
+    {-2000.0f,  -800.0f, "Reverse-Left"      },
+    {    0.0f,     0.0f, "Stop (pre-loop)"   },
+};
+
+#define TEST_PHASE_COUNT (sizeof(test_seq) / sizeof(test_seq[0]))
+
+static void vTestVectorTask(void *pvParameters)
 {
+    (void)pvParameters;
+    vector_cart_t cmd;
+    int phase = 0;
+    int tick = TEST_PHASE_TICKS;  /* 立即切换到第一个阶段 */
+
+    ESP_LOGI(TAG, "TestVector: started, %d phases", TEST_PHASE_COUNT);
+
+    while (1) {
+        /* 阶段切换: 在新阶段开始时打印标识 */
+        if (tick >= TEST_PHASE_TICKS) {
+            tick = 0;
+            ESP_LOGI(TAG, "TestVector: phase %d/%d → %s (x=%.0f y=%.0f)",
+                     phase + 1, TEST_PHASE_COUNT,
+                     test_seq[phase].desc,
+                     (double)test_seq[phase].x,
+                     (double)test_seq[phase].y);
+        }
+
+        /* 发送当前阶段的测试向量 */
+        cmd.x = test_seq[phase].x;
+        cmd.y = test_seq[phase].y;
+        xQueueOverwrite(q_cart, &cmd);
+
+        vTaskDelay(pdMS_TO_TICKS(TEST_TICK_MS));
+        tick++;
+
+        /* 阶段完成 → 推进到下一阶段 (在发送之后) */
+        if (tick >= TEST_PHASE_TICKS) {
+            phase = (phase + 1) % TEST_PHASE_COUNT;
+        }
+    }
+}
+#endif
+
+void app_main(void) {
     ESP_LOGI(TAG, "System Init");
 
-    if (ld14p_init(4) != ESP_OK) {
+    /* 0. NVS (WiFi 需要) */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    /* 1. 硬件驱动初始化 */
+
+    /* LiDAR 传感器驱动 */
+    if (ld14p_init() != ESP_OK) {
         ESP_LOGE(TAG, "LD14P init failed");
         return;
     }
+    /* 电机 PWM 驱动 */
+    if (motor_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Motor init failed");
+        return;
+    }
+    /* DS18B20 温度传感器 */
+    if (ds18b20_init() != ESP_OK) {
+        ESP_LOGW(TAG, "DS18B20 init failed, temperature task will retry");
+    }
+    /* 火焰传感器 GPIO 初始化 */
+    if (flame_sensor_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Flame sensor GPIO init failed");
+    }
 
-    /* 传感器任务参数: 输出队列 + 同步事件组 */
-    // static lidar_sensor_params_t params;
-    // params.q_polar = xQueueCreate(LIDAR_SECTORS, sizeof(vector_polar_t));
-    // params.eg_sync = xEventGroupCreate();
+    /* 2. WiFi (MQTT 需要) */
+    ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&cfg);
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    wifi_config_t wifi_cfg = { .sta = { .ssid = WIFI_SSID, .password = WIFI_PASS } };
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+    esp_wifi_start();
+    ESP_LOGI(TAG, "WiFi connecting...");
 
-    xTaskCreate(vLedTask,          "LedTask",       2048, NULL,    1, NULL);
-    // xTaskCreate(ld14p_sensor_task, "ld14p_sensor",  8192, &params, 3, NULL);
+    /* 3. 创建任务间通信对象 (句柄定义在文件顶部) */
+
+    /* q_polar: LD14P (36) + 火焰传感器 (5) 极坐标数据 */
+    q_polar = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
+    if (q_polar == NULL) {
+        ESP_LOGE(TAG, "q_polar creation failed");
+        return;
+    }
+    /* q_cart: 用于APF算法计算的笛卡尔坐标数据 */
+    q_cart = xQueueCreate(MOTOR_CMD_QUEUE_DEPTH, sizeof(vector_cart_t));
+    if (q_cart == NULL) {
+        ESP_LOGE(TAG, "q_cart creation failed");
+        return;
+    }
+    /* q_temp: DS18B20 温度数据队列 (depth=4, 1s 缓冲) */
+    q_temp = xQueueCreate(4, sizeof(float));
+    if (q_temp == NULL) {
+        ESP_LOGE(TAG, "q_temp creation failed");
+        return;
+    }
+    /* q_mqtt: MQTT 日志数据队列 (depth=41, 与 q_polar 一致) */
+    q_mqtt = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
+    if (q_mqtt == NULL) {
+        ESP_LOGE(TAG, "q_mqtt creation failed");
+        return;
+    }
+    /* eg_sync: 用于确保传感器就绪的事件组 */
+    eg_sync = xEventGroupCreate();
+    if (eg_sync == NULL) {
+        ESP_LOGE(TAG, "eg_sync creation failed");
+        return;
+    }
+
+    /* 4. 创建任务 */
+
+    /* 心跳 LED，优先级最低 */
+    xTaskCreate(vLedTask, "LedTask", 2048, NULL, 1, NULL);
+    /* LIDAR 传感器任务，较复杂，依赖UART缓冲区 */
+    xTaskCreate(ld14p_task, "ld14p_sensor", 8192, NULL, 5, NULL);
+    /* 火焰传感器任务，简单，快速完成 */
+    xTaskCreate(flame_task, "flame_sensor", 2048, NULL, 7, NULL);
+    /* 温度传感器任务，有时序要求 */
+    xTaskCreate(temp_task, "temp_sensor", 2048, NULL, 6, NULL);
+    /* MQTT 日志上传任务，低优先级，与数据流解耦 */
+    xTaskCreate(mqtt_task, "mqtt_log", 8192, NULL, 3, NULL);
+#ifndef DEBUG
+    /* APF 避障任务，较复杂，依赖雷达、温度传感器数据，读取队列后即释放事件组 */
+    if (xTaskCreate(apf_task, "apf_task", 4096, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "APF task creation failed");
+        return;
+    }
+#endif
+#ifdef DEBUG
+    /* 测试向量生成任务 (验证电机驱动, 不与 APF 共存) */
+    if (xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL,
+                    4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "TestVector task creation failed");
+        return;
+    }
+#endif
+    /* 电机控制任务，较复杂，强时序要求 */
+    if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 8, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Motor task creation failed");
+        return;
+    }
+    ESP_LOGI(TAG, "\n----------Leaving app_main, scheduler to be started----------\n\n");
 }

@@ -5,4 +5,13 @@ idf_component_register(
     SRCS ${app_sources}
     INCLUDE_DIRS 
         ${CMAKE_SOURCE_DIR}/include
+    REQUIRES
+        driver
+        esp_event
+        esp_netif
+        esp_timer
+        esp_wifi
+        json
+        mqtt
+        nvs_flash
 )

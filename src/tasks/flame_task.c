@@ -1,0 +1,68 @@
+/**
+ * @file flame_task.c
+ * @brief 火焰传感器任务 — 4Hz GPIO 采样, 非阻塞跳过模式
+ *
+ * 若 BIT_FLAME_Q_READY 已置位 (APF 未消费上一帧), 跳过本周期.
+ */
+#include "tasks/flame_task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/event_groups.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+
+static const char *TAG = "FLAME_TASK";
+
+static const struct {
+    gpio_num_t gpio;
+    float      angle_deg;
+} flame_sensors[FLAME_SENSOR_COUNT] = {
+    {11, 300.0f},   /* 左侧 */
+    {12, 330.0f},   /* 左前方 */
+    {15,   0.0f},   /* 正前方 (中心) */
+    {13,  30.0f},   /* 右前方 */
+    {14,  60.0f},   /* 右侧 */
+};
+
+esp_err_t flame_sensor_init(void) {
+    gpio_config_t io_conf = {
+        .pin_bit_mask = FLAME_GPIO_MASK,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,      /* 上拉: 无火=HIGH, 有火=LOW */
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    return gpio_config(&io_conf);
+}
+
+void flame_task(void *pvParameters) {
+    (void)pvParameters;
+
+    const TickType_t period = pdMS_TO_TICKS(250);   /* 4Hz */
+    uint32_t skip_count = 0;
+    ESP_LOGI(TAG, "Flame task started @4Hz, GPIO [11,12,15,13,14]");
+
+    while (1) {
+        if (!(xEventGroupGetBits(eg_sync) & BIT_FLAME_Q_READY)) {
+            vector_polar_t data[FLAME_SENSOR_COUNT];
+            for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
+                data[i].angle_deg = flame_sensors[i].angle_deg;
+                bool flame_detected = (gpio_get_level(flame_sensors[i].gpio) == 0);
+                data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 65535.0f;
+            }
+
+            for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
+                xQueueSend(q_polar, &data[i], 0);
+            }
+            xEventGroupSetBits(eg_sync, BIT_FLAME_Q_READY);
+            skip_count = 0;
+        } else {
+            if ((skip_count++ & 0xF) == 0) {
+                ESP_LOGW(TAG, "Flame skipped: q_polar occupied (skip #%lu)", skip_count);
+            }
+        }
+
+        vTaskDelay(period);
+    }
+}
