@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-/** 电机状态枚举 (状态机) */
+/* 电机状态枚举 (状态机) */
 typedef enum {
     MOTOR_STATE_IDLE = 0,        /**< 静止 */
     MOTOR_STATE_FORWARD,         /**< 前进 (直线 / 微调) */

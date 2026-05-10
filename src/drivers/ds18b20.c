@@ -194,10 +194,10 @@ esp_err_t ds18b20_init(void) {
 
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << pin),
-        .mode         = GPIO_MODE_OUTPUT_OD,      /* 开漏: 可拉低或释放 */
-        .pull_up_en   = GPIO_PULLUP_ENABLE,       /* 内部上拉 (仍需外接 4.7KΩ) */
+        .mode = GPIO_MODE_OUTPUT_OD,      /* 开漏: 可拉低或释放 */
+        .pull_up_en = GPIO_PULLUP_ENABLE,       /* 内部上拉 (仍需外接 4.7KΩ) */
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_conf);
     ow_release(pin);    /* 总线空闲 = 高电平 */
@@ -223,9 +223,9 @@ esp_err_t ds18b20_init(void) {
     vTaskDelay(pdMS_TO_TICKS(15));  /* EEPROM 写入需 ≥10ms */
 
     ESP_LOGI(TAG, "Ready on GPIO%d, %d-bit resolution (%.2f°C, %lums conv)",
-             DS18B20_GPIO_PIN, DS18B20_RES_BITS,
-             (double)(1.0f / (1 << (DS18B20_RES_BITS - 8))),
-             (unsigned long)res_to_conv_ms(DS18B20_RES_BITS));
+        DS18B20_GPIO_PIN, DS18B20_RES_BITS,
+        (double)(1.0f / (1 << (DS18B20_RES_BITS - 8))),
+        (unsigned long)res_to_conv_ms(DS18B20_RES_BITS));
     return ESP_OK;
 }
 

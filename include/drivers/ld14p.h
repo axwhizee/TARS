@@ -1,8 +1,6 @@
-#pragma once
-#include "all_defs.h"
-
-/*
- * ld14p.h — LD14P 激光雷达驱动
+/**
+ * @file ld14p.h
+ * @brief LD14P 激光雷达驱动
  *
  * 内部类型 (调用者不需要直接操作):
  *   ld14p_point_t — 单个采样点 (距离 + 强度)
@@ -17,6 +15,9 @@
  *   4. ld14p_get_cloud(out)      — 快照 cloud_360[] → vector_polar_t[360],
  *                                  返回有效点数
  */
+#pragma once
+#include "all_defs.h"
+
 
 /* ────────── 内部数据类型 ────────── */
 

@@ -26,20 +26,18 @@ static const struct {
     {14,  60.0f},   /* 右侧 */
 };
 
-esp_err_t flame_sensor_init(void)
-{
+esp_err_t flame_sensor_init(void) {
     gpio_config_t io_conf = {
         .pin_bit_mask = FLAME_GPIO_MASK,
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,      /* 上拉: 无火=HIGH, 有火=LOW */
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,      /* 上拉: 无火=HIGH, 有火=LOW */
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
     return gpio_config(&io_conf);
 }
 
-void flame_task(void *pvParameters)
-{
+void flame_task(void *pvParameters) {
     (void)pvParameters;
 
     const TickType_t period = pdMS_TO_TICKS(250);   /* 4Hz */
@@ -54,7 +52,7 @@ void flame_task(void *pvParameters)
         /* 读 GPIO, 构造 5 个 vector_polar_t */
         vector_polar_t data[FLAME_SENSOR_COUNT];
         for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
-            data[i].angle_deg   = flame_sensors[i].angle_deg;
+            data[i].angle_deg = flame_sensors[i].angle_deg;
             bool flame_detected = (gpio_get_level(flame_sensors[i].gpio) == 0);
             data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 65535.0f;
         }

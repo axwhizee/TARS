@@ -10,7 +10,6 @@
  *         → xQueueSend(q_polar)     → 推送 36 点
  *         → xEventGroupSetBits       → 通知 APF 任务
  */
-
 #include "tasks/lidar_task.h"
 #include "drivers/ld14p.h"
 #include "all_defs.h"
@@ -31,23 +30,23 @@ static const char *TAG = "LIDAR_TASK";
  * 输出角度为扇区中点: 5°, 15°, 25°, ..., 355°.
  */
 static void lidar_process(const vector_polar_t raw[LD14P_POINTS_PER_REV],
-                          vector_polar_t out[LIDAR_SECTORS]) {
+    vector_polar_t out[LIDAR_SECTORS]) {
     for (int s = 0; s < LIDAR_SECTORS; s++) {
         int base = s * 10;          /* 扇区起始角度索引 */
 
         float sum_wx = 0.0f;        /* Σ(weight × distance) */
-        float sum_w  = 0.0f;        /* Σ(weight) */
+        float sum_w = 0.0f;        /* Σ(weight) */
 
         for (int j = 0; j < 10; j++) {
             float d = raw[base + j].distance_mm;
             if (d > 0.0f && d < 60000.0f) {     /* 有效点, d>0 防止 1/d² 除零产生 NaN */
                 float w = 1.0f / (d * d);        /* 反平方权重: 近强远弱 */
                 sum_wx += w * d;
-                sum_w  += w;
+                sum_w += w;
             }
         }
 
-        out[s].angle_deg   = 5.0f + s * 10.0f;    /* 扇区中点角度 */
+        out[s].angle_deg = 5.0f + s * 10.0f;    /* 扇区中点角度 */
         out[s].distance_mm = (sum_w > 0.0f) ? (sum_wx / sum_w) : 65535.0f;
     }
 }
@@ -77,7 +76,7 @@ void ld14p_task(void *pvParameters) {
                     uint32_t valid = ld14p_get_cloud(lidar_raw);
                     rev_count++;
                     ESP_LOGI(TAG, "REV #%lu: %lu / %d valid → %d sectors",
-                             rev_count, valid, LD14P_POINTS_PER_REV, LIDAR_SECTORS);
+                        rev_count, valid, LD14P_POINTS_PER_REV, LIDAR_SECTORS);
 
                     /* 降采样: 360 点 → 36 扇区 */
                     vector_polar_t sectors[LIDAR_SECTORS];

@@ -11,13 +11,10 @@
 #include <stdint.h>
 
 
-/**
- * vector_polar_t — 带显式角度的输出结构 (公用数据类型)
- * angle_deg: 传感器正前方为 0°, 顺时针递增 (LD14P 原生坐标系)
- */
+// ==================== 极坐标坐标向量（统一传感器数据） ====================
 typedef struct {
-    float distance_mm;
-    float angle_deg;
+    float distance_mm;  // 带显式角度的输出结构 (公用数据类型)
+    float angle_deg;    // 传感器正前方为 0°, 顺时针递增 (LD14P 原生坐标系)
 } vector_polar_t;
 
 // ==================== 笛卡尔坐标向量（APF计算结果） ====================
@@ -57,7 +54,7 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define LD14P_UART_RX_PIN    18 // <-> Y <-> TX
 #define LD14P_UART_RX_BUF    2048
 
-// LD14P：1(R)->RX, 2(B)->GND, 3(Y)->TX, 4(G)->VCC
+// LD14P：1(Red)<->RX, 2(Blue)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
 
 /* ---------- 火焰传感器 ---------- */
 
@@ -102,11 +99,9 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_CTL_HZ            8       /* 电机控制任务运行频率 (Hz) */
 #define MOTOR_CTL_PERIOD_MS     (1000 / MOTOR_CTL_HZ)  /* 125ms */
 
-/**
- * EMA 时间常数 τ = 300ms, 控制平滑收敛速度
- * α = 1 - exp(-dt/τ) = 1 - exp(-125/300) ≈ 0.34
- * 若改为 16Hz (dt=62.5ms): α = 1 - exp(-62.5/300) ≈ 0.19
- */
+ /* EMA 时间常数 τ = 300ms, 控制平滑收敛速度 */
+ /* α = 1 - exp(-dt/τ) = 1 - exp(-125/300) ≈ 0.34 */
+ /* 若改为 16Hz (dt=62.5ms): α = 1 - exp(-62.5/300) ≈ 0.19 */
 #define MOTOR_EMA_TC_MS         150.0f
 #define MOTOR_EMA_ALPHA         0.34f   /* α = 1 - exp(-MOTOR_CTL_PERIOD_MS / MOTOR_EMA_TC_MS) */
 
@@ -118,4 +113,4 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
 #define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
 
-// #define DEBUG
+ // #define DEBUG

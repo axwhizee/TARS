@@ -28,7 +28,7 @@ static const char *TAG = "LD14P ";
 
 /* 编译期断言: packed 结构体不能有 padding */
 _Static_assert(sizeof(ld14p_frame_t) == FRAME_LEN,
-               "ld14p_frame_t must be exactly 47 bytes");
+    "ld14p_frame_t must be exactly 47 bytes");
 
 /* ────────── CRC8 (多项式 0x4D) ────────── */
 
@@ -83,8 +83,8 @@ const ld14p_frame_t *ld14p_feed_byte(uint8_t byte) {
     if (state == S_IDLE) {
         if (byte == HEADER) {
             buf[0] = HEADER;
-            idx    = 1;
-            state  = S_FRAME;
+            idx = 1;
+            state = S_FRAME;
         }
         return NULL;
     }
@@ -93,11 +93,11 @@ const ld14p_frame_t *ld14p_feed_byte(uint8_t byte) {
     buf[idx++] = byte;
     if (idx >= FRAME_LEN) {
         state = S_IDLE;
-        idx   = 0;
+        idx = 0;
 
         if (buf[1] != VER_LEN)       return NULL;  /* 帧长标识不匹配 */
         if (crc8_calc(buf, CRC_COVER) != buf[CRC_COVER])
-                                     return NULL;  /* CRC 失败 */
+            return NULL;  /* CRC 失败 */
 
         return (const ld14p_frame_t *)buf;          /* ✅ 完整有效帧 */
     }
@@ -115,7 +115,7 @@ bool ld14p_process_frame(const ld14p_frame_t *frm) {
     if (prev_start_angle > 30000 && frm->start_angle < 6000
         && (now - rev_last_tick) > pdMS_TO_TICKS(REV_DEBOUNCE_MS)) {
         revolution_flag = true;
-        rev_last_tick   = now;
+        rev_last_tick = now;
     }
     prev_start_angle = frm->start_angle;
 
@@ -143,7 +143,7 @@ bool ld14p_process_frame(const ld14p_frame_t *frm) {
 uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV]) {
     uint32_t valid = 0;
     for (int i = 0; i < LD14P_POINTS_PER_REV; i++) {
-        out[i].angle_deg   = (float)i;
+        out[i].angle_deg = (float)i;
         out[i].distance_mm = (float)cloud_360[i].distance;
         if (cloud_360[i].distance < 60000) valid++;      /* 0xFFFF = 无效 */
     }
@@ -155,9 +155,8 @@ uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV]) {
 static void send_freq_command(uint8_t freq_hz) {
     /* 0xA2 命令: 8 字节, CRC 覆盖前 7 字节 */
     uint16_t speed = (uint16_t)LIDAR_FREQ * 360;
-    uint8_t cmd[8] = { HEADER, CMD_SPEED, 4,
-                       (uint8_t)(speed & 0xFF), (uint8_t)(speed >> 8),
-                       0x00, 0x00, 0x00 };
+    uint8_t cmd[8] = { HEADER, CMD_SPEED, 4, (uint8_t)(speed & 0xFF),
+        (uint8_t)(speed >> 8), 0x00, 0x00, 0x00 };
     cmd[7] = crc8_calc(cmd, 7);
     uart_write_bytes(LD14P_UART_NUM, cmd, sizeof(cmd));
     ESP_LOGI(TAG, "LD14P set freq @ %d Hz (%d deg/s)", LIDAR_FREQ, speed);
@@ -168,31 +167,28 @@ esp_err_t ld14p_init() {
 
     memset(cloud_360, 0xFF, sizeof(cloud_360));   /* 0xFFFF = 未填充 */
     prev_start_angle = 0;
-    revolution_flag  = false;
-    rev_last_tick    = 0;
+    revolution_flag = false;
+    rev_last_tick = 0;
 
     /* UART1: 115200-8N1, TX=17→PWM/RX, RX=18←TX */
     uart_config_t cfg = {
-        .baud_rate  = LD14P_UART_BAUD,
-        .data_bits  = UART_DATA_8_BITS,
-        .parity     = UART_PARITY_DISABLE,
-        .stop_bits  = UART_STOP_BITS_1,
-        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .baud_rate = LD14P_UART_BAUD,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
 
     esp_err_t err = uart_param_config(LD14P_UART_NUM, &cfg);
     if (err != ESP_OK) return err;
 
-    err = uart_set_pin(LD14P_UART_NUM,
-                       LD14P_UART_TX_PIN, LD14P_UART_RX_PIN,
-                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    err = uart_set_pin(LD14P_UART_NUM, LD14P_UART_TX_PIN, LD14P_UART_RX_PIN,
+        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) return err;
 
-    /* event_queue=NULL → sensor 任务必须用 timeout=0 非阻塞读取 */
-    err = uart_driver_install(LD14P_UART_NUM,
-                              LD14P_UART_RX_BUF * 2,  /* 4096B RX ring */
-                              0, 0, NULL, 0);
+    /* event_queue=NULL → sensor 任务必须用 timeout=0 非阻塞读取，4096B RX ring */
+    err = uart_driver_install(LD14P_UART_NUM, LD14P_UART_RX_BUF * 2, 0, 0, NULL, 0);
     if (err != ESP_OK) return err;
 
     /* 等 UART 稳定 → 发速率命令 → 等电机响应 */

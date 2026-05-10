@@ -31,7 +31,7 @@ void temp_task(void *pvParameters) {
     while (1) {
         if (ds18b20_start_conversion() != ESP_OK) {
             ESP_LOGW(TAG, "Conversion start failed, retrying in %lums",
-                     (unsigned long)(1000 / DS18B20_TASK_FREQ));
+                (unsigned long)(1000 / DS18B20_TASK_FREQ));
             vTaskDelay(period);
             last_wake = xTaskGetTickCount();
             continue;

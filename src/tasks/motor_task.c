@@ -16,7 +16,6 @@
  *     2. motor_clamp_classify() — 钳位 + 5 态分类
  *     3. motor_diff_to_pwm()    — 笛卡尔→差速 PWM
  */
-
 #include "tasks/motor_task.h"
 #include "drivers/motor.h"
 #include "freertos/FreeRTOS.h"
@@ -51,10 +50,10 @@ typedef struct {
  *  钳位到 ±6m
  */
 static void motor_cmd_to_ema(const vector_cart_t *cmd,
-        float *ema_x, float *ema_y,
-        float *target_x, float *target_y,
-        TickType_t *last_tick
-        ) {
+    float *ema_x, float *ema_y,
+    float *target_x, float *target_y,
+    TickType_t *last_tick
+) {
     TickType_t now = xTaskGetTickCount();
 
     if (cmd != NULL) {
@@ -74,9 +73,9 @@ static void motor_cmd_to_ema(const vector_cart_t *cmd,
     *ema_y = MOTOR_EMA_ALPHA * (*target_y) + (1.0f - MOTOR_EMA_ALPHA) * (*ema_y);
 
     /* 钳位到有效范围 */
-    if (*ema_x >  6000.0f) *ema_x =  6000.0f;
+    if (*ema_x > 6000.0f) *ema_x = 6000.0f;
     if (*ema_x < -6000.0f) *ema_x = -6000.0f;
-    if (*ema_y >  6000.0f) *ema_y =  6000.0f;
+    if (*ema_y > 6000.0f) *ema_y = 6000.0f;
     if (*ema_y < -6000.0f) *ema_y = -6000.0f;
 }
 
@@ -92,8 +91,7 @@ static void motor_cmd_to_ema(const vector_cart_t *cmd,
  * @param y  EMA 滤波后的 y 分量 (mm), >0 右转 / <0 左转
  * @return motor_state_t
  */
-static motor_state_t motor_clamp_classify(float x, float y)
-{
+static motor_state_t motor_clamp_classify(float x, float y) {
     float ax = fabsf(x);
     float ay = fabsf(y);
 
@@ -104,7 +102,7 @@ static motor_state_t motor_clamp_classify(float x, float y)
     /* x≈0 但 y≠0: 纯原地旋转 */
     if (ax < MOTOR_DEADZONE_MM) {
         return (y > 0.0f) ? MOTOR_STATE_FORWARD_TURN
-                          : MOTOR_STATE_REVERSE_TURN;
+            : MOTOR_STATE_REVERSE_TURN;
     }
 
     if (ay < MOTOR_TURN_THRESHOLD * ax) {
@@ -131,27 +129,27 @@ static motor_state_t motor_clamp_classify(float x, float y)
  * @param right_pwm [out] 右轮 PWM 占空比
  */
 static void motor_diff_to_pwm(float x, float y, motor_state_t state,
-                              int16_t *left_pwm, int16_t *right_pwm) {
-    float linear  = x / 6000.0f;
+    int16_t *left_pwm, int16_t *right_pwm) {
+    float linear = x / 6000.0f;
     float angular = y / 6000.0f * MOTOR_TURN_RATIO;
 
-    float left  = linear - angular;
+    float left = linear - angular;
     float right = linear + angular;
 
     /* 比例归一化: 保持转向比, 不超出 [-1,1] */
     float m = fabsf(left);
     if (fabsf(right) > m) m = fabsf(right);
     if (m > 1.0f) {
-        left  /= m;
+        left /= m;
         right /= m;
     }
 
     if (state == MOTOR_STATE_IDLE) {
-        left  = 0.0f;
+        left = 0.0f;
         right = 0.0f;
     }
 
-    *left_pwm  = (int16_t)(left  * MOTOR_MAX_DUTY);
+    *left_pwm = (int16_t)(left * MOTOR_MAX_DUTY);
     *right_pwm = (int16_t)(right * MOTOR_MAX_DUTY);
 }
 
@@ -171,8 +169,8 @@ void motor_task(void *pvParameters) {
     (void)pvParameters;
 
     /* EMA 滤波器状态 */
-    float ema_x = 0.0f,  ema_y  = 0.0f;
-    float tgt_x = 0.0f,  tgt_y  = 0.0f;
+    float ema_x = 0.0f, ema_y = 0.0f;
+    float tgt_x = 0.0f, tgt_y = 0.0f;
     TickType_t last_cmd_tick = 0;
 
     /* 状态机 */
@@ -182,8 +180,8 @@ void motor_task(void *pvParameters) {
     TickType_t wake_time = xTaskGetTickCount();     // 固定周期调度
 
     ESP_LOGI(TAG, "Motor task started @ %dHz (period=%ums), alpha=%.3f tau=%.0fms",
-             MOTOR_CTL_HZ, MOTOR_CTL_PERIOD_MS,
-             (double)MOTOR_EMA_ALPHA, (double)MOTOR_EMA_TC_MS);
+        MOTOR_CTL_HZ, MOTOR_CTL_PERIOD_MS,
+        (double)MOTOR_EMA_ALPHA, (double)MOTOR_EMA_TC_MS);
 
     while (1) {
         vTaskDelayUntil(&wake_time, pdMS_TO_TICKS(MOTOR_CTL_PERIOD_MS));

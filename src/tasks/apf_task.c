@@ -14,7 +14,6 @@
  *   2~6m     → 感知区 (斥力权重 ×1.0)
  *   >6m      → 噪声 / 忽略
  */
-
 #include "tasks/apf_task.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -56,7 +55,7 @@ static inline float repulse_weight(float distance) {
 
 static inline void force_check(vector_cart_t *result) {
     /* 1. 异常值拦截 */
-    if (isnan(result->x) || isnan(result->y) || 
+    if (isnan(result->x) || isnan(result->y) ||
         isinf(result->x) || isinf(result->y)) {
         ESP_LOGW(TAG, "Invalid force vector, zeroing out");
         result->x = 0.0f;
@@ -136,7 +135,7 @@ void apf_task(void *pvParameters) {
 
             polar_to_cart(ra, point.angle_deg, &dx, &dy);
             r_cubed = ra * ra * ra;
-            f_rep   = APF_REPULSE_GAIN * repulse_weight(ra) / r_cubed;
+            f_rep = APF_REPULSE_GAIN * repulse_weight(ra) / r_cubed;
             rep_fx -= f_rep * dx;
             rep_fy -= f_rep * dy;
 

@@ -55,8 +55,7 @@ static inline void ledc_duty_apply(ledc_channel_t channel, uint32_t duty) {
  * | <0    | 0    | PWM  | 反转 (后退)  |
  * | =0    | 0    | 0    | 滑行 (Coast) |
  */
-static void motor_set_side(ledc_channel_t in1_ch, ledc_channel_t in2_ch,
-                           int16_t speed) {
+static void motor_set_side(ledc_channel_t in1_ch, ledc_channel_t in2_ch, int16_t speed) {
     uint32_t duty;
 
     /* 钳位到允许范围 */
@@ -85,11 +84,11 @@ esp_err_t motor_init(void) {
 
     /* ---------- 配置 LEDC 定时器 ---------- */
     ledc_timer_config_t timer_cfg = {
-        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_10_BIT,
-        .timer_num       = LEFT_TIMER,
-        .freq_hz         = MOTOR_PWM_FREQ,
-        .clk_cfg         = LEDC_AUTO_CLK,
+        .timer_num = LEFT_TIMER,
+        .freq_hz = MOTOR_PWM_FREQ,
+        .clk_cfg = LEDC_AUTO_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer_cfg), TAG, "Left timer config failed");
 
@@ -99,30 +98,30 @@ esp_err_t motor_init(void) {
     /* ---------- 配置 4 路 LEDC 通道 ---------- */
     ledc_channel_config_t ch_cfg = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty       = 0,
-        .hpoint     = 0,
+        .duty = 0,
+        .hpoint = 0,
     };
 
     /* 左侧 IN1 — GPIO4, ch0, timer0 */
-    ch_cfg.gpio_num   = MOTOR_LEFT_IN1_GPIO;
-    ch_cfg.channel    = LEFT_IN1_CHANNEL;
-    ch_cfg.timer_sel  = LEFT_TIMER;
+    ch_cfg.gpio_num = MOTOR_LEFT_IN1_GPIO;
+    ch_cfg.channel = LEFT_IN1_CHANNEL;
+    ch_cfg.timer_sel = LEFT_TIMER;
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "Left IN1 channel failed");
 
     /* 左侧 IN2 — GPIO5, ch1, timer0 */
-    ch_cfg.gpio_num   = MOTOR_LEFT_IN2_GPIO;
-    ch_cfg.channel    = LEFT_IN2_CHANNEL;
+    ch_cfg.gpio_num = MOTOR_LEFT_IN2_GPIO;
+    ch_cfg.channel = LEFT_IN2_CHANNEL;
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "Left IN2 channel failed");
 
     /* 右侧 IN1 — GPIO6, ch2, timer1 */
-    ch_cfg.gpio_num   = MOTOR_RIGHT_IN1_GPIO;
-    ch_cfg.channel    = RIGHT_IN1_CHANNEL;
-    ch_cfg.timer_sel  = RIGHT_TIMER;
+    ch_cfg.gpio_num = MOTOR_RIGHT_IN1_GPIO;
+    ch_cfg.channel = RIGHT_IN1_CHANNEL;
+    ch_cfg.timer_sel = RIGHT_TIMER;
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "Right IN1 channel failed");
 
     /* 右侧 IN2 — GPIO7, ch3, timer1 */
-    ch_cfg.gpio_num   = MOTOR_RIGHT_IN2_GPIO;
-    ch_cfg.channel    = RIGHT_IN2_CHANNEL;
+    ch_cfg.gpio_num = MOTOR_RIGHT_IN2_GPIO;
+    ch_cfg.channel = RIGHT_IN2_CHANNEL;
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "Right IN2 channel failed");
 
     /* 初始化为滑行状态 (所有通道占空比 0) */
@@ -139,7 +138,7 @@ esp_err_t motor_set(int16_t left, int16_t right) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    motor_set_side(LEFT_IN1_CHANNEL,  LEFT_IN2_CHANNEL,  left);
+    motor_set_side(LEFT_IN1_CHANNEL, LEFT_IN2_CHANNEL, left);
     motor_set_side(RIGHT_IN1_CHANNEL, RIGHT_IN2_CHANNEL, right);
 
     return ESP_OK;
@@ -153,8 +152,8 @@ void motor_brake(void) {
      *       通过设置 100% 占空比实现持续 HIGH 电平 */
     const uint32_t full = (1U << MOTOR_PWM_RES_BITS) - 1; /* 1023 */
 
-    ledc_duty_apply(LEFT_IN1_CHANNEL,  full);
-    ledc_duty_apply(LEFT_IN2_CHANNEL,  full);
+    ledc_duty_apply(LEFT_IN1_CHANNEL, full);
+    ledc_duty_apply(LEFT_IN2_CHANNEL, full);
     ledc_duty_apply(RIGHT_IN1_CHANNEL, full);
     ledc_duty_apply(RIGHT_IN2_CHANNEL, full);
 }
@@ -164,8 +163,8 @@ void motor_coast(void) {
     if (!initialized) return;
 
     /* 滑行: 全部通道占空比 0 → Hi-Z */
-    ledc_duty_apply(LEFT_IN1_CHANNEL,  0);
-    ledc_duty_apply(LEFT_IN2_CHANNEL,  0);
+    ledc_duty_apply(LEFT_IN1_CHANNEL, 0);
+    ledc_duty_apply(LEFT_IN2_CHANNEL, 0);
     ledc_duty_apply(RIGHT_IN1_CHANNEL, 0);
     ledc_duty_apply(RIGHT_IN2_CHANNEL, 0);
 }
