@@ -54,10 +54,10 @@ static inline float repulse_weight(float distance) {
     return APF_SAFE_REPULSE_WT;
 }
 
-static inline void force_check(float total_fx, float total_fy, vector_cart_t *result) {
+static inline void force_check(vector_cart_t *result) {
     /* 1. 异常值拦截 */
-    if (isnan(total_fx) || isnan(total_fy) || 
-        isinf(total_fx) || isinf(total_fy)) {
+    if (isnan(result->x) || isnan(result->y) || 
+        isinf(result->x) || isinf(result->y)) {
         ESP_LOGW(TAG, "Invalid force vector, zeroing out");
         result->x = 0.0f;
         result->y = 0.0f;
@@ -65,32 +65,27 @@ static inline void force_check(float total_fx, float total_fy, vector_cart_t *re
     }
 
     /* 2. 计算合力幅值（使用 hypotf 提升数值稳定性） */
-    float mag = hypotf(total_fx, total_fy);
+    float mag = hypotf(result->x, result->y);
 
     /* 3. 死区处理 & 幅值限幅（互斥分支，提升效率） */
     if (mag < APF_MIN_FORCE_MM) {
-        total_fx = 0.0f;
-        total_fy = 0.0f;
+        result->x = 0.0f;
+        result->y = 0.0f;
     } else if (mag > APF_MAX_FORCE_MM) {
         float scale = APF_MAX_FORCE_MM / mag; // 仅一次除法
-        total_fx *= scale;
-        total_fy *= scale;
+        result->x *= scale;
+        result->y *= scale;
     }
-
-    /* 4. 推送至电机控制任务 */
-    result->x = total_fx;
-    result->y = total_fy;
 }
 
 void apf_task(void *pvParameters) {
     (void)pvParameters;
-    vector_polar_t point;       // 接收到的向量
-    vector_cart_t   result;     // 最终结果
-    float rep_fx, rep_fy;       // 斥力累加器
-    float dx, dy, ra, r_cubed, f_rep;    // 单点转换
-    float total_fx, total_fy;   // 合力
-    float mag;                  // 合力幅值
-    int danger_cnt, safe_cnt, noise_cnt;    // 分类统计
+    vector_polar_t  batch[Q_POLAR_DEPTH];  /* 批量读取缓冲区 */
+    vector_polar_t  point;
+    vector_cart_t   result;
+    float rep_fx, rep_fy;
+    float dx, dy, ra, r_cubed, f_rep;
+    int danger_cnt, safe_cnt, noise_cnt;
 
     ESP_LOGI(TAG, "APF task started: K_att=%.0f K_rep=%.0f danger<%.0fmm safe<%.0fmm",
         (double)APF_ATTRACT_GAIN, (double)APF_REPULSE_GAIN,
@@ -98,55 +93,50 @@ void apf_task(void *pvParameters) {
     );
 
     while (1) {
-        /* 1. 等待 LiDAR 数据就绪信号 (375ms 超时) */
+        /* 1. 等待 LiDAR + 火焰传感器数据全部就绪 */
         EventBits_t bits = xEventGroupWaitBits(
             eg_sync,
-            BIT_LIDAR_READY,
-            pdTRUE,    /* 读取后自动清零 */
-            pdFALSE,   /* 任意一位即可 (这里只有 1 位) */
-            pdMS_TO_TICKS(375)
+            BIT_LIDAR_READY | BIT_FLAME_READY,
+            pdFALSE,   /* 不自动清除 */
+            pdTRUE,    /* 等待全部 bits */
+            pdMS_TO_TICKS(375)  // 超时时间 375ms
         );
 
-        if ((bits & BIT_LIDAR_READY) == 0) {
+        if ((bits & (BIT_LIDAR_READY | BIT_FLAME_READY)) != (BIT_LIDAR_READY | BIT_FLAME_READY)) {
             /* 超时: 推送零指令停止机器人 */
             result.x = result.y = 0.0f;
             xQueueOverwrite(q_cart, &result);
-            ESP_LOGW(TAG, "LiDAR sync timeout");
+            ESP_LOGW(TAG, "Sensor sync timeout");
             continue;
         }
 
-        /* 2. 从队列读取全部 LIDAR_SECTORS 个扇区数据 */
+        /* 2. 一次性读取全部 41 点到本地缓冲区 (非阻塞, 数据必然在队列中) */
+        for (int i = 0; i < Q_POLAR_DEPTH; i++) {
+            xQueueReceive(q_polar, &batch[i], 0);
+        }
+
+        /* 3. 读完立即释放状态位, 生产者可开始下一轮采集 */
+        xEventGroupClearBits(eg_sync, BIT_LIDAR_READY | BIT_FLAME_READY);
+
+        /* 4. 离线批量计算 APF (此时生产者已释放, 互不阻塞) */
         rep_fx = 0.0f;
         rep_fy = 0.0f;
         danger_cnt = 0;
         safe_cnt = 0;
         noise_cnt = 0;
 
-        for (int i = 0; i < LIDAR_SECTORS; i++) {
-            /* 使用阻塞接收 (数据已在队列中, 应立即返回) */
-            if (xQueueReceive(q_polar, &point, pdMS_TO_TICKS(50)) != pdTRUE) {
-                ESP_LOGW(TAG, "q_polar underflow: got %d/%d points", i, LIDAR_SECTORS);
-                break;
-            }
-
+        for (int i = 0; i < Q_POLAR_DEPTH; i++) {
+            point = batch[i];
             ra = point.distance_mm;
-            /*  检查: 传感器数据异常（为空/无限、小于最小感知、进入噪声区）时直接丢弃，避免参与坐标转换 */
+
             if (isnan(ra) || isinf(ra) || ra < APF_PERCEPTION_MIN_MM || ra > APF_SAFE_RANGE_MM) {
                 noise_cnt++;
                 continue;
             }
 
-            /* 极坐标 → 笛卡尔, 累积斥力 */
-            /* 斥力公式: F_rep = -K_rep * w(ra) * (dx/r³, dy/r³) */
-            /* - 方向: 远离障碍 = -unit(dx,dy) = -(dx/ra, dy/ra) */
-            /* - 幅值: ∝ 1/r² (越近越强) */
-            /* - F_rep = -K_rep * w * (dx/r³, dy/r³) */
             polar_to_cart(ra, point.angle_deg, &dx, &dy);
-
-            /* r³ 用于 1/r² 衰减 */
             r_cubed = ra * ra * ra;
             f_rep   = APF_REPULSE_GAIN * repulse_weight(ra) / r_cubed;
-            /* 斥力方向: 从障碍物指向机器人 (机器人位于原点) */
             rep_fx -= f_rep * dx;
             rep_fy -= f_rep * dy;
 
@@ -156,16 +146,14 @@ void apf_task(void *pvParameters) {
                 safe_cnt++;
             }
         }
-        // ESP_LOGI(TAG, "Polar data READY");
 
-        /* 4. 引力 + 斥力 = 合力，引力: (K_att, 0) 恒定向前 */
-        total_fx = APF_ATTRACT_GAIN + rep_fx;
-        total_fy = rep_fy;  /* 引力无 y 分量 */
+        /* 5. 引力 + 斥力 = 合力 */
+        result.x = APF_ATTRACT_GAIN + rep_fx;
+        result.y = rep_fy;
 
-        force_check(total_fx, total_fy, &result);
+        force_check(&result);
         xQueueOverwrite(q_cart, &result);
         ESP_LOGI(TAG, "F_cmd = (%.0f,%.0f) | danger=%d safe=%d noise=%d",
-                 (double)total_fx, (double)total_fy,
-                 danger_cnt, safe_cnt, noise_cnt);
+            (double)result.x, (double)result.y, danger_cnt, safe_cnt, noise_cnt);
     }
 }

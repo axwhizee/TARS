@@ -29,6 +29,7 @@
 #include "tasks/lidar_task.h"
 #include "drivers/ds18b20.h"
 #include "tasks/temp_task.h"
+#include "tasks/flame_task.h"
 
 static const char *TAG = "MAIN";
 
@@ -136,11 +137,15 @@ void app_main(void) {
     if (ds18b20_init() != ESP_OK) {
         ESP_LOGW(TAG, "DS18B20 init failed, temperature task will retry");
     }
+    /* 火焰传感器 GPIO 初始化 */
+    if (flame_sensor_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Flame sensor GPIO init failed");
+    }
 
     /* 2. 创建任务间通信对象 (句柄定义在文件顶部) */
 
-    /* q_polar: 传感器获取的极坐标数据 */
-    q_polar = xQueueCreate(LIDAR_SECTORS, sizeof(vector_polar_t));
+    /* q_polar: LD14P (36) + 火焰传感器 (5) 极坐标数据 */
+    q_polar = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
     if (q_polar == NULL) {
         ESP_LOGE(TAG, "q_polar creation failed");
         return;
@@ -171,7 +176,9 @@ void app_main(void) {
     /* LiDAR 传感器任务 */
     xTaskCreate(ld14p_task, "ld14p_sensor", 8192, NULL, 3, NULL);
     /* DS18B20 温度传感器任务 */
-    xTaskCreate(temp_task, "temp_sensor", 2048, NULL, 2, NULL);
+    xTaskCreate(temp_task, "temp_sensor", 2048, NULL, 4, NULL);
+    /* 火焰传感器任务 */
+    xTaskCreate(flame_task, "flame_sensor", 2048, NULL, 4, NULL);
 #ifndef DEBUG
     /* APF 避障任务 (release 模式使用 LiDAR 数据计算避障) */
     if (xTaskCreate(apf_task, "apf_task", 4096, NULL, 2, NULL) != pdPASS) {
@@ -188,7 +195,7 @@ void app_main(void) {
     }
 #endif
     /* 电机控制任务 */
-    if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 4, NULL) != pdPASS) {
+    if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Motor task creation failed");
         return;
     }

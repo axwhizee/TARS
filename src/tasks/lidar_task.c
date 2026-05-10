@@ -58,11 +58,15 @@ void ld14p_task(void *pvParameters) {
     uint32_t rev_count = 0;
 
     while (1) {
+        /* 自旋等待消费者取走上轮数据再开始下一轮 UART 读取 */
+        while (xEventGroupGetBits(eg_sync) & BIT_LIDAR_READY) {
+            vTaskDelay(2);  // 约20ms的任务挂起
+        }   // 似乎没有能等待事件组变为0的办法，如果想要优化这段代码，只能调整系统架构，比如添加一个空闲标志位，或者改用二值信号量
+
         /* ─── 非阻塞 drain UART ring buffer ─── */
         uint8_t buf[256];
         int len;
-
-        while ((len = uart_read_bytes(LD14P_UART_NUM, buf, sizeof(buf), 0)) > 0) {
+        while ((len = uart_read_bytes(LD14P_UART_NUM, buf, sizeof(buf), pdMS_TO_TICKS(10))) > 0) {
             for (int i = 0; i < len; i++) {
                 const ld14p_frame_t *frm = ld14p_feed_byte(buf[i]);
 
@@ -79,19 +83,15 @@ void ld14p_task(void *pvParameters) {
                     vector_polar_t sectors[LIDAR_SECTORS];
                     lidar_process(lidar_raw, sectors);
 
-                    /* 推送: 检查上一帧是否被取走 */
-                    if (xEventGroupGetBits(eg_sync) & BIT_LIDAR_READY) {
-                        ESP_LOGW(TAG, "Frame dropped: previous data unread");
-                    } else {
-                        for (int i = 0; i < LIDAR_SECTORS; i++) {
-                            xQueueSend(q_polar, &sectors[i], 0);
-                        }
-                        xEventGroupSetBits(eg_sync, BIT_LIDAR_READY);
+                    for (int i = 0; i < LIDAR_SECTORS; i++) {
+                        xQueueSend(q_polar, &sectors[i], 0);
                     }
+                    xEventGroupSetBits(eg_sync, BIT_LIDAR_READY);
                 }
             }
         }
 
-        vTaskDelay(2);
+        // 由于有自旋20ms挂起，暂时注释
+        // vTaskDelay(2);
     }
 }

@@ -37,6 +37,7 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 #define BIT_LIDAR_READY       (1 << 0) /* APF 任务的 lidar 数据就绪位 */
 #define BIT_TEMP_READY        (1 << 1) /* DS18B20 温度数据就绪位 */
+#define BIT_FLAME_READY       (1 << 2) /* 火焰传感器数据就绪位 */
 
 /* ---------- 板级硬件配置 ---------- */
 
@@ -57,6 +58,16 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define LD14P_UART_RX_BUF    2048
 
 // LD14P：1(R)->RX, 2(B)->GND, 3(Y)->TX, 4(G)->VCC
+
+/* ---------- 火焰传感器 ---------- */
+
+#define FLAME_SENSOR_COUNT      5
+#define FLAME_DETECT_MM        500.0f  /* 检测到火焰时的虚拟距离 (进入危险区) */
+#define FLAME_GPIO_MASK        ((1ULL << 11) | (1ULL << 12) | (1ULL << 13) | (1ULL << 14) | (1ULL << 15))
+
+/* ---------- Q_POLAR 队列容量 (LiDAR + 火焰传感器) ---------- */
+
+#define Q_POLAR_DEPTH           (LIDAR_SECTORS + FLAME_SENSOR_COUNT)  /* 36 + 5 = 41 */
 
 /* ---------- DS18B20 温度传感器 ---------- */
 
