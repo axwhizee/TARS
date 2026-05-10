@@ -1,14 +1,15 @@
 /**
  * @file lidar_task.c
- * @brief LD14P 传感器任务
+ * @brief LD14P 传感器任务 — 非阻塞跳过模式
  *
  * 数据流:
  *   UART1 → ld14p_feed_byte(byte)  → ld14p_frame_t*
  *         → ld14p_process_frame(frm) → 更新 cloud_360[], 返回 true=圈完成
  *         → ld14p_get_cloud(raw)    → vector_polar_t[360]
  *         → lidar_process(raw, out) → 降采样 360→36 点 (最小距离加权平均)
- *         → xQueueSend(q_polar)     → 推送 36 点
- *         → xEventGroupSetBits       → 通知 APF 任务
+ *         → if (!BIT_LIDAR_Q_READY) → xQueueSend(q_polar) → 推送 36 点
+ *                                    → xEventGroupSetBits(LIDAR_Q_READY)
+ *         → else skip (APF 未消费上一帧)
  */
 #include "tasks/lidar_task.h"
 #include "drivers/ld14p.h"
@@ -55,13 +56,9 @@ void ld14p_task(void *pvParameters) {
     (void)pvParameters;
     ESP_LOGI(TAG, "Lidar task started @4Hz");
     uint32_t rev_count = 0;
+    uint32_t skip_count = 0;
 
     while (1) {
-        /* 自旋等待消费者取走上轮数据再开始下一轮 UART 读取 */
-        while (xEventGroupGetBits(eg_sync) & BIT_LIDAR_READY) {
-            vTaskDelay(2);  // 约20ms的任务挂起
-        }   // 似乎没有能等待事件组变为0的办法，如果想要优化这段代码，只能调整系统架构，比如添加一个空闲标志位，或者改用二值信号量
-
         /* ─── 非阻塞 drain UART ring buffer ─── */
         uint8_t buf[256];
         int len;
@@ -78,19 +75,25 @@ void ld14p_task(void *pvParameters) {
                     ESP_LOGI(TAG, "REV #%lu: %lu / %d valid → %d sectors",
                         rev_count, valid, LD14P_POINTS_PER_REV, LIDAR_SECTORS);
 
-                    /* 降采样: 360 点 → 36 扇区 */
-                    vector_polar_t sectors[LIDAR_SECTORS];
-                    lidar_process(lidar_raw, sectors);
+                    if (!(xEventGroupGetBits(eg_sync) & BIT_LIDAR_Q_READY)) {
+                        /* 降采样: 360 点 → 36 扇区 */
+                        vector_polar_t sectors[LIDAR_SECTORS];
+                        lidar_process(lidar_raw, sectors);
 
-                    for (int i = 0; i < LIDAR_SECTORS; i++) {
-                        xQueueSend(q_polar, &sectors[i], 0);
+                        for (int i = 0; i < LIDAR_SECTORS; i++) {
+                            xQueueSend(q_polar, &sectors[i], 0);
+                        }
+                        xEventGroupSetBits(eg_sync, BIT_LIDAR_Q_READY);
+                        skip_count = 0;
+                    } else {
+                        if ((skip_count++ & 0xF) == 0) {
+                            ESP_LOGW(TAG, "Lidar skipped: q_polar occupied (skip #%lu)", skip_count);
+                        }
                     }
-                    xEventGroupSetBits(eg_sync, BIT_LIDAR_READY);
                 }
             }
         }
 
-        // 由于有自旋20ms挂起，暂时注释
-        // vTaskDelay(2);
+        vTaskDelay(2);
     }
 }

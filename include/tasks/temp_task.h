@@ -1,9 +1,9 @@
 /**
  * @file temp_task.h
- * @brief DS18B20 温度传感器任务
+ * @brief DS18B20 温度传感器任务 — 非阻塞跳过模式
  *
  * 职责: 以 4Hz 频率启动温度转换 → 轮询完成 → 读取温度 →
- *       推送 q_temp → 置 BIT_TEMP_READY
+ *       if (!BIT_TEMP_Q_READY) 推送 q_temp → 置 BIT_TEMP_Q_READY
  */
 #pragma once
 #include "all_defs.h"

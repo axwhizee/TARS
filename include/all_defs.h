@@ -28,13 +28,15 @@ typedef struct {
 extern QueueHandle_t        q_polar;    /* LD14P 数据队列 */
 extern QueueHandle_t        q_cart;     /* APF 计算结果队列，深度 1 */
 extern QueueHandle_t        q_temp;     /* DS18B20 温度数据队列 */
+extern QueueHandle_t        q_mqtt;     /* MQTT 日志数据队列 (透传 vector_polar_t) */
 extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 任务间同步 ---------- */
 
-#define BIT_LIDAR_READY       (1 << 0) /* APF 任务的 lidar 数据就绪位 */
-#define BIT_TEMP_READY        (1 << 1) /* DS18B20 温度数据就绪位 */
-#define BIT_FLAME_READY       (1 << 2) /* 火焰传感器数据就绪位 */
+#define BIT_LIDAR_Q_READY      (1 << 0) /* q_polar 中有新的激光雷达数据 */
+#define BIT_TEMP_Q_READY       (1 << 1) /* q_temp 中有新的温度数据 */
+#define BIT_FLAME_Q_READY      (1 << 2) /* q_polar 中有新的火焰传感器数据 */
+#define BIT_MQTT_Q_READY       (1 << 3) /* q_mqtt 中有新的日志数据 */
 
 /* ---------- 板级硬件配置 ---------- */
 
@@ -112,5 +114,12 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_TURN_RATIO        0.7f    /* 差速转向中角分量的灵敏度权重 */
 #define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
 #define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
+
+/* ---------- WiFi / MQTT ---------- */
+
+#define WIFI_SSID              "YOUR_SSID"
+#define WIFI_PASS              "YOUR_PASSWORD"
+#define MQTT_BROKER_URI        "mqtt://192.168.1.100:1883"
+#define MQTT_TOPIC             "esp32/sensors"
 
  // #define DEBUG

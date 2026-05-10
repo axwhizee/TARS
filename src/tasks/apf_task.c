@@ -80,7 +80,7 @@ static inline void force_check(vector_cart_t *result) {
 void apf_task(void *pvParameters) {
     (void)pvParameters;
     vector_polar_t  batch[Q_POLAR_DEPTH];  /* 批量读取缓冲区 */
-    vector_polar_t  point;
+    vector_polar_t  dummy, point;
     vector_cart_t   result;
     float rep_fx, rep_fy;
     float dx, dy, ra, r_cubed, f_rep;
@@ -95,29 +95,38 @@ void apf_task(void *pvParameters) {
         /* 1. 等待 LiDAR + 火焰传感器数据全部就绪 */
         EventBits_t bits = xEventGroupWaitBits(
             eg_sync,
-            BIT_LIDAR_READY | BIT_FLAME_READY,
-            pdFALSE,   /* 不自动清除 */
-            pdTRUE,    /* 等待全部 bits */
-            pdMS_TO_TICKS(375)  // 超时时间 375ms
+            BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY,
+            pdFALSE,
+            pdTRUE,
+            pdMS_TO_TICKS(375)
         );
 
-        if ((bits & (BIT_LIDAR_READY | BIT_FLAME_READY)) != (BIT_LIDAR_READY | BIT_FLAME_READY)) {
-            /* 超时: 推送零指令停止机器人 */
+        if ((bits & (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) != (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) {
             result.x = result.y = 0.0f;
             xQueueOverwrite(q_cart, &result);
             ESP_LOGW(TAG, "Sensor sync timeout");
             continue;
         }
 
-        /* 2. 一次性读取全部 41 点到本地缓冲区 (非阻塞, 数据必然在队列中) */
-        for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-            xQueueReceive(q_polar, &batch[i], 0);
+        /* 2. 看门狗: MQTT 上周期超时未消费 → 清空 q_mqtt + 清除 MQTT_Q_READY */
+        if (xEventGroupGetBits(eg_sync) & BIT_MQTT_Q_READY) {
+            ESP_LOGW(TAG, "MQTT timeout: draining q_mqtt");
+            while (xQueueReceive(q_mqtt, &dummy, 0) == pdTRUE) {}
+            xEventGroupClearBits(eg_sync, BIT_MQTT_Q_READY);
         }
 
-        /* 3. 读完立即释放状态位, 生产者可开始下一轮采集 */
-        xEventGroupClearBits(eg_sync, BIT_LIDAR_READY | BIT_FLAME_READY);
+        /* 3. 读取 q_polar → 同时透传至 q_mqtt */
+        for (int i = 0; i < Q_POLAR_DEPTH; i++) {
+            xQueueReceive(q_polar, &point, 0);
+            batch[i] = point;
+            xQueueSend(q_mqtt, &point, 0);
+        }
 
-        /* 4. 离线批量计算 APF (此时生产者已释放, 互不阻塞) */
+        /* 4. 清除传感器位, 通知 MQTT */
+        xEventGroupClearBits(eg_sync, BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY);
+        xEventGroupSetBits(eg_sync, BIT_MQTT_Q_READY);
+
+        /* 5. 离线批量计算 APF */
         rep_fx = 0.0f;
         rep_fy = 0.0f;
         danger_cnt = 0;
@@ -146,7 +155,6 @@ void apf_task(void *pvParameters) {
             }
         }
 
-        /* 5. 引力 + 斥力 = 合力 */
         result.x = APF_ATTRACT_GAIN + rep_fx;
         result.y = rep_fy;
 

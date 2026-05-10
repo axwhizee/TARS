@@ -1,9 +1,8 @@
 /**
  * @file flame_task.c
- * @brief 火焰传感器任务 — 4Hz GPIO 采样 → 虚拟障碍物注入 q_polar
+ * @brief 火焰传感器任务 — 4Hz GPIO 采样, 非阻塞跳过模式
  *
- * 同步: 等待 BIT_FLAME_READY 被消费者清除 → 读 GPIO → 推送 5 点 → 置位.
- * 消费者读取全部 41 点后统一清除 BIT_LIDAR | BIT_FLAME.
+ * 若 BIT_FLAME_Q_READY 已置位 (APF 未消费上一帧), 跳过本周期.
  */
 #include "tasks/flame_task.h"
 #include "freertos/FreeRTOS.h"
@@ -41,27 +40,28 @@ void flame_task(void *pvParameters) {
     (void)pvParameters;
 
     const TickType_t period = pdMS_TO_TICKS(250);   /* 4Hz */
+    uint32_t skip_count = 0;
     ESP_LOGI(TAG, "Flame task started @4Hz, GPIO [11,12,15,13,14]");
 
     while (1) {
-        /* 自旋等待消费者取走上轮数据 */
-        while (xEventGroupGetBits(eg_sync) & BIT_FLAME_READY) {
-            vTaskDelay(2);  // 约20ms的任务挂起
-        }
+        if (!(xEventGroupGetBits(eg_sync) & BIT_FLAME_Q_READY)) {
+            vector_polar_t data[FLAME_SENSOR_COUNT];
+            for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
+                data[i].angle_deg = flame_sensors[i].angle_deg;
+                bool flame_detected = (gpio_get_level(flame_sensors[i].gpio) == 0);
+                data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 65535.0f;
+            }
 
-        /* 读 GPIO, 构造 5 个 vector_polar_t */
-        vector_polar_t data[FLAME_SENSOR_COUNT];
-        for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
-            data[i].angle_deg = flame_sensors[i].angle_deg;
-            bool flame_detected = (gpio_get_level(flame_sensors[i].gpio) == 0);
-            data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 65535.0f;
+            for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
+                xQueueSend(q_polar, &data[i], 0);
+            }
+            xEventGroupSetBits(eg_sync, BIT_FLAME_Q_READY);
+            skip_count = 0;
+        } else {
+            if ((skip_count++ & 0xF) == 0) {
+                ESP_LOGW(TAG, "Flame skipped: q_polar occupied (skip #%lu)", skip_count);
+            }
         }
-
-        /* 推送至共享队列 */
-        for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
-            xQueueSend(q_polar, &data[i], 0);
-        }
-        xEventGroupSetBits(eg_sync, BIT_FLAME_READY);
 
         vTaskDelay(period);
     }
