@@ -225,6 +225,7 @@ if (xQueueReceive(vector_queue, &vec, pdMS_TO_TICKS(100)) == pdTRUE) {
 5. [LD14P官方SDK](https://github.com/ldrobotSensorTeam/ldlidar_sl_sdk/tree/master)
 4. [乐动LD14P激光传感器开发手册](https://files.waveshare.com/upload/9/99/LD14P_Development_Manual.pdf)
 5. [乐动LD14P激光传感器数据手册](https://www.ldrobot.com/images/2023/03/02/LDROBOT_LD14P%20DataSheet_CN_v0.4_Wlmrp6QT.pdf)
+6. [案例](https://github.com/HumbertoDiego/lidar-experiments/blob/main/1-LD14P.md)
 
 #### 电机
 

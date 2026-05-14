@@ -40,7 +40,15 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 板级硬件配置 ---------- */
 
-#define LED_PIN              48
+#define LED_PIN                 48  // 内置
+#define DS18B20_GPIO_PIN        8   /* DQ 数据线 (1-Wire) */
+#define MOTOR_LEFT_IN1_GPIO     4   /* 左侧 IN1 (AIN1), PWM */
+#define MOTOR_LEFT_IN2_GPIO     5   /* 左侧 IN2 (AIN2), Level */
+#define MOTOR_RIGHT_IN1_GPIO    6   /* 右侧 IN1 (BIN1), PWM */
+#define MOTOR_RIGHT_IN2_GPIO    7   /* 右侧 IN2 (BIN2), Level */
+#define FLAME_GPIO_MASK         ((1ULL << 11) | (1ULL << 12) | (1ULL << 13) | (1ULL << 14) | (1ULL << 15))
+#define LD14P_UART_TX_PIN       17  // <-> R <-> RX
+#define LD14P_UART_RX_PIN       18  // <-> Y <-> TX
 
 /* ---------- LD14P 数据协议 ---------- */
 
@@ -52,8 +60,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 #define LD14P_UART_NUM       UART_NUM_1
 #define LD14P_UART_BAUD      115200
-#define LD14P_UART_TX_PIN    17 // <-> R <-> RX
-#define LD14P_UART_RX_PIN    18 // <-> Y <-> TX
 #define LD14P_UART_RX_BUF    2048
 
 // LD14P：1(Red)<->RX, 2(Blue)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
@@ -62,7 +68,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 #define FLAME_SENSOR_COUNT      5
 #define FLAME_DETECT_MM        500.0f  /* 检测到火焰时的虚拟距离 (进入危险区) */
-#define FLAME_GPIO_MASK        ((1ULL << 11) | (1ULL << 12) | (1ULL << 13) | (1ULL << 14) | (1ULL << 15))
 
 /* ---------- Q_POLAR 队列容量 (LiDAR + 火焰传感器) ---------- */
 
@@ -70,7 +75,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- DS18B20 温度传感器 ---------- */
 
-#define DS18B20_GPIO_PIN      9       /* DQ 数据线 (1-Wire) */
 #define DS18B20_RES_BITS      10      /* 10-bit 精度 (0.25°C, 188ms 转换), 支持 4Hz */
 #define DS18B20_TASK_FREQ     4       /* 采样频率 (Hz) */
 
@@ -89,10 +93,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 电机驱动硬件配置 ---------- */
 
-#define MOTOR_LEFT_IN1_GPIO    4        /* 左侧 IN1 (AIN1), PWM */
-#define MOTOR_LEFT_IN2_GPIO    5        /* 左侧 IN2 (AIN2), Level */
-#define MOTOR_RIGHT_IN1_GPIO   6        /* 右侧 IN1 (BIN1), PWM */
-#define MOTOR_RIGHT_IN2_GPIO   7        /* 右侧 IN2 (BIN2), Level */
 
 #define MOTOR_PWM_FREQ         20000    /* PWM 频率 20kHz (高于人耳听觉范围) */
 #define MOTOR_PWM_RES_BITS     10       /* 10-bit 分辨率 (0-1023) */
