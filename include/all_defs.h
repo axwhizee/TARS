@@ -93,10 +93,11 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 电机驱动硬件配置 ---------- */
 
-
-#define MOTOR_PWM_FREQ         20000    /* PWM 频率 20kHz (高于人耳听觉范围) */
+#define MOTOR_PWM_FREQ         20000    /* PWM 频率 20kHz */
 #define MOTOR_PWM_RES_BITS     10       /* 10-bit 分辨率 (0-1023) */
-#define MOTOR_MAX_DUTY         (((1U << MOTOR_PWM_RES_BITS) - 1) * 80U / 100U) /* 80% = 818 */
+#define MOTOR_MAX_DUTY         ((1U << MOTOR_PWM_RES_BITS) - 1)  /* 1023 = 100% */
+#define MOTOR_MIN_EFF_DUTY_FRAC 75      /* 能克服电机静摩擦力的最低有效占空比百分比，需根据实测情况设置 */
+#define MOTOR_MIN_EFF_DUTY     (MOTOR_MAX_DUTY * MOTOR_MIN_EFF_DUTY_FRAC / 100U)  /* 767 = 75% */
 
 #define MOTOR_CTL_HZ            8       /* 电机控制任务运行频率 (Hz) */
 #define MOTOR_CTL_PERIOD_MS     (1000 / MOTOR_CTL_HZ)  /* 125ms */

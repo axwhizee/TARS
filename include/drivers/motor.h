@@ -13,7 +13,12 @@
  *   反转: IN1=0,   IN2=PWM
  *   制动: IN1=1,   IN2=1  (Low-side brake)
  *   滑行: IN1=0,   IN2=0  (Hi-Z coast)
+ *
+ * 百分比死区:
+ *   motor_set_side() 内部将 1%~100% 映射到 [MIN_EFF, MAX] 占空比,
+ *   0% 为滑行停车。调用方无需关心底层 PWM 分辨率。
  */
+
 #pragma once
 #include "all_defs.h"
 
@@ -28,33 +33,20 @@ extern "C" {
 esp_err_t motor_init(void);
 
 /**
- * @brief 设置左右电机转速 / 方向
+ * @brief 设置左右电机转速 / 方向 (百分比制)
  *
- * @param left  左侧电机: [-MOTOR_MAX_DUTY, MOTOR_MAX_DUTY]
- *              正数 = 前进, 负数 = 后退, 零 = 滑行
+ * @param left  左侧电机: [-100, 100]
+ *              正数 = 前进, 负数 = 后退, 0 = 滑行
  * @param right 右侧电机: 同上
  * @return ESP_OK 成功
  *
- * @note 调用方负责在换向 (正转↔反转) 前插入制动死区
+ * @note 内部将 [1,100] 重映射到 [MIN_EFF_DUTY, MAX_DUTY];
+ *       调用方负责在换向 (正转↔反转) 前插入制动死区。
  */
-esp_err_t motor_set(int16_t left, int16_t right);
+esp_err_t motor_set(int8_t left, int8_t right);
 
-/**
- * @brief 主动制动 (四轮同时 Low-side Brake)
- *        所有 IN 引脚置高 → 电机绕组短接 → 快速制动
- */
 void motor_brake(void);
-
-/**
- * @brief 滑行停车 (四轮同时 Hi-Z Coast)
- *        所有 IN 引脚置低 → 电机惯性转动
- */
 void motor_coast(void);
-
-/**
- * @brief 释放 LEDC 资源 (仅调试 / 重启前调用)
- */
-// void motor_deinit(void);
 
 #ifdef __cplusplus
 }

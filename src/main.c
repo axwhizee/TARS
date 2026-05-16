@@ -23,6 +23,8 @@
 #include "esp_event.h"
 #include "esp_wifi.h"
 
+// #define DEBUG
+
 static const char *TAG = "MAIN";
 
 /* 全局 RTOS 句柄 (供所有任务模块通过 extern 引用) */
@@ -49,64 +51,27 @@ static void vLedTask(void *pvParameters)
 
 #ifdef DEBUG
 /**
- * @brief 测试阶段定义（临时, 用于验证电机驱动）
+ * @brief 百分比斜坡测试 — 驱动层自动处理死区映射
  *
- * 每个阶段持续 TEST_PHASE_DURATION_MS, 循环发送 vector_cart_t 到 q_cart
- * EMA 滤波会使电机平滑过渡
+ * 循环: 0%→100% → 滑行 2s → 重复
+ * motor_set_side() 将 1%~100% 内部映射到 [75%, 100%] 实际占空比
  */
-#define TEST_TICK_MS      250   /* 每个测试周期发送一次指令 */
-#define TEST_PHASE_TICKS  (3000 / TEST_TICK_MS)  /* 每阶段持续 3s = 15 次 */
-
-typedef struct {
-    float x;     /* 前进/后退分量 (mm) */
-    float y;     /* 转向分量 (mm) */
-    const char *desc;
-} test_phase_t;
-
-static const test_phase_t test_seq[] = {
-    { 3000.0f,     0.0f, "Forward"           },
-    { 2000.0f,   800.0f, "Forward-Right"     },
-    { 3000.0f,     0.0f, "Forward"           },
-    {    0.0f,     0.0f, "Stop"              },
-    {-2000.0f,     0.0f, "Reverse"           },
-    {-2000.0f,  -800.0f, "Reverse-Left"      },
-    {    0.0f,     0.0f, "Stop (pre-loop)"   },
-};
-
-#define TEST_PHASE_COUNT (sizeof(test_seq) / sizeof(test_seq[0]))
-
-static void vTestVectorTask(void *pvParameters)
-{
+static void vTestVectorTask(void *pvParameters) {
     (void)pvParameters;
-    vector_cart_t cmd;
-    int phase = 0;
-    int tick = TEST_PHASE_TICKS;  /* 立即切换到第一个阶段 */
+    const int step_ms = 50;
+    int pct;
 
-    ESP_LOGI(TAG, "TestVector: started, %d phases", TEST_PHASE_COUNT);
+    ESP_LOGI(TAG, "=== Percent Ramp: 0→100%%, step=%dms ===", step_ms);
 
     while (1) {
-        /* 阶段切换: 在新阶段开始时打印标识 */
-        if (tick >= TEST_PHASE_TICKS) {
-            tick = 0;
-            ESP_LOGI(TAG, "TestVector: phase %d/%d → %s (x=%.0f y=%.0f)",
-                     phase + 1, TEST_PHASE_COUNT,
-                     test_seq[phase].desc,
-                     (double)test_seq[phase].x,
-                     (double)test_seq[phase].y);
+        for (pct = 0; pct <= 100; pct++) {
+            motor_set((int8_t)pct, (int8_t)pct);
+            ESP_LOGI(TAG, "motor set %d %%", pct);
+            vTaskDelay(pdMS_TO_TICKS(step_ms));
         }
-
-        /* 发送当前阶段的测试向量 */
-        cmd.x = test_seq[phase].x;
-        cmd.y = test_seq[phase].y;
-        xQueueOverwrite(q_cart, &cmd);
-
-        vTaskDelay(pdMS_TO_TICKS(TEST_TICK_MS));
-        tick++;
-
-        /* 阶段完成 → 推进到下一阶段 (在发送之后) */
-        if (tick >= TEST_PHASE_TICKS) {
-            phase = (phase + 1) % TEST_PHASE_COUNT;
-        }
+        ESP_LOGI(TAG, "--- Coast 2s ---");
+        motor_coast();
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 #endif
