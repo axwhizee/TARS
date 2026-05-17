@@ -41,17 +41,6 @@ static inline void ledc_duty_apply(ledc_channel_t channel, uint32_t duty) {
     ledc_update_duty(LEDC_LOW_SPEED_MODE, channel);
 }
 
-/**
- * @brief 控制单侧电机的 IN1/IN2 信号 (百分比制 + 死区重映射)
- *
- * @param in1_ch  IN1 对应的 LEDC 通道
- * @param in2_ch  IN2 对应的 LEDC 通道
- * @param percent -100 ~ 100, 正=前进, 负=后退, 0=滑行
- *
- * 死区重映射: [1%, 100%] → [MIN_EFF_DUTY, MAX_DUTY]
- *   低于 75% 等效占空比的指令被箝位到最小有效输出,
- *   避免电机堵转发热。差速控制利用 75%~100% 区间。
- */
 static void motor_set_side(ledc_channel_t in1_ch, ledc_channel_t in2_ch, int8_t percent) {
     uint8_t  abs_pct;
     uint32_t duty;

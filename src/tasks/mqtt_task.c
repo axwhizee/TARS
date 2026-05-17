@@ -3,7 +3,7 @@
  * @brief MQTT 日志任务 — 接收 APF 转发数据 + 温度 → JSON → MQTT 发布
  *
  * 同步:
- *   等待 BIT_MQTT_Q_READY | BIT_TEMP_Q_READY 双就绪 → 消费 q_mqtt + q_temp
+ *   等待 BIT_LOG_Q_READY | BIT_TEMP_Q_READY 双就绪 → 消费 q_log + q_temp
  *   → 清除两个事件位 (释放生产者) → 组装 JSON → MQTT 发布
  */
 #include "tasks/mqtt_task.h"
@@ -36,16 +36,16 @@ void mqtt_task(void *pvParameters) {
         /* 1. 等待 MQTT 批次 + 温度双就绪 */
         xEventGroupWaitBits(
             eg_sync,
-            BIT_MQTT_Q_READY | BIT_TEMP_Q_READY,
+            BIT_LOG_Q_READY | BIT_TEMP_Q_READY,
             pdFALSE,
             pdTRUE,
             portMAX_DELAY
         );
 
-        /* 2. 读取 q_mqtt: 41 个 vector_polar_t */
+        /* 2. 读取 q_log: 41 个 vector_polar_t */
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-            xQueueReceive(q_mqtt, &vectors[i], 0);
+            xQueueReceive(q_log, &vectors[i], 0);
         }
 
         /* 3. 读取 q_temp: 温度 */
@@ -53,7 +53,7 @@ void mqtt_task(void *pvParameters) {
         xQueueReceive(q_temp, &temp, 0);
 
         /* 4. 清除事件位, 释放传感器 */
-        xEventGroupClearBits(eg_sync, BIT_MQTT_Q_READY | BIT_TEMP_Q_READY);
+        xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY | BIT_TEMP_Q_READY);
         ESP_LOGI(TAG, "Batch consumed, bits cleared");
 
         /* 5. 时间戳 (MQTT 发帧时刻) */

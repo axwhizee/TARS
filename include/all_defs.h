@@ -28,7 +28,7 @@ typedef struct {
 extern QueueHandle_t        q_polar;    /* LD14P 数据队列 */
 extern QueueHandle_t        q_cart;     /* APF 计算结果队列，深度 1 */
 extern QueueHandle_t        q_temp;     /* DS18B20 温度数据队列 */
-extern QueueHandle_t        q_mqtt;     /* MQTT 日志数据队列 (透传 vector_polar_t) */
+extern QueueHandle_t        q_log;      /* 日志上传数据队列 (透传 vector_polar_t) */
 extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 任务间同步 ---------- */
@@ -36,7 +36,7 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define BIT_LIDAR_Q_READY      (1 << 0) /* q_polar 中有新的激光雷达数据 */
 #define BIT_TEMP_Q_READY       (1 << 1) /* q_temp 中有新的温度数据 */
 #define BIT_FLAME_Q_READY      (1 << 2) /* q_polar 中有新的火焰传感器数据 */
-#define BIT_MQTT_Q_READY       (1 << 3) /* q_mqtt 中有新的日志数据 */
+#define BIT_LOG_Q_READY        (1 << 3) /* q_log 中有新的一帧日志数据 */
 
 /* ---------- 板级硬件配置 ---------- */
 
@@ -46,9 +46,11 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_LEFT_IN2_GPIO     5   /* 左侧 IN2 (AIN2), Level */
 #define MOTOR_RIGHT_IN1_GPIO    6   /* 右侧 IN1 (BIN1), PWM */
 #define MOTOR_RIGHT_IN2_GPIO    7   /* 右侧 IN2 (BIN2), Level */
-#define FLAME_GPIO_MASK         ((1ULL << 11) | (1ULL << 12) | (1ULL << 13) | (1ULL << 14) | (1ULL << 15))
+#define FLAME_GPIO_MASK         ((1ULL << 15) | (1ULL << 14) | (1ULL << 13) | (1ULL << 12) | (1ULL << 11))
 #define LD14P_UART_TX_PIN       17  // <-> R <-> RX
 #define LD14P_UART_RX_PIN       18  // <-> Y <-> TX
+
+// LD14P：1(Red)<->RX, 2(Black)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
 
 /* ---------- LD14P 数据协议 ---------- */
 
@@ -61,8 +63,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define LD14P_UART_NUM       UART_NUM_1
 #define LD14P_UART_BAUD      115200
 #define LD14P_UART_RX_BUF    2048
-
-// LD14P：1(Red)<->RX, 2(Blue)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
 
 /* ---------- 火焰传感器 ---------- */
 
@@ -116,11 +116,12 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
 #define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
 
-/* ---------- WiFi / MQTT ---------- */
+/* ---------- WiFi / 日志上传 (MQTT / WebSocket) ---------- */
 
-#define WIFI_SSID              "YOUR_SSID"
-#define WIFI_PASS              "YOUR_PASSWORD"
+#define WIFI_SSID              "TAP"
+#define WIFI_PASS              "qwertyuiop"
 #define MQTT_BROKER_URI        "mqtt://192.168.1.100:1883"
 #define MQTT_TOPIC             "esp32/sensors"
+#define WEBSOCKET_PORT         81
 
  // #define DEBUG

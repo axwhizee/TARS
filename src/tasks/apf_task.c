@@ -108,23 +108,23 @@ void apf_task(void *pvParameters) {
             continue;
         }
 
-        /* 2. 看门狗: MQTT 上周期超时未消费 → 清空 q_mqtt + 清除 MQTT_Q_READY */
-        if (xEventGroupGetBits(eg_sync) & BIT_MQTT_Q_READY) {
-            ESP_LOGW(TAG, "MQTT timeout: draining q_mqtt");
-            while (xQueueReceive(q_mqtt, &dummy, 0) == pdTRUE) {}
-            xEventGroupClearBits(eg_sync, BIT_MQTT_Q_READY);
+        /* 2. 看门狗: 上周期日志未被消费 → 清空 q_log + 清除 BIT_LOG_Q_READY */
+        if (xEventGroupGetBits(eg_sync) & BIT_LOG_Q_READY) {
+            ESP_LOGW(TAG, "Log timeout: draining q_log");
+            while (xQueueReceive(q_log, &dummy, 0) == pdTRUE) {}
+            xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY);
         }
 
-        /* 3. 读取 q_polar → 同时透传至 q_mqtt */
+        /* 3. 读取 q_polar → 同时透传至 q_log */
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
             xQueueReceive(q_polar, &point, 0);
             batch[i] = point;
-            xQueueSend(q_mqtt, &point, 0);
+            xQueueSend(q_log, &point, 0);
         }
 
-        /* 4. 清除传感器位, 通知 MQTT */
+        /* 4. 清除传感器位, 通知日志任务 */
         xEventGroupClearBits(eg_sync, BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY);
-        xEventGroupSetBits(eg_sync, BIT_MQTT_Q_READY);
+        xEventGroupSetBits(eg_sync, BIT_LOG_Q_READY);
 
         /* 5. 离线批量计算 APF */
         rep_fx = 0.0f;

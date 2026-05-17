@@ -17,7 +17,8 @@
 #include "tasks/temp_task.h"
 #include "tasks/apf_task.h"
 #include "tasks/motor_task.h"
-#include "tasks/mqtt_task.h"
+// #include "tasks/mqtt_task.h"
+#include "tasks/websocket_task.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -31,8 +32,9 @@ static const char *TAG = "MAIN";
 QueueHandle_t       q_polar;    /* LD14P 数据队列 */
 QueueHandle_t       q_cart;     /* APF 结果队列 (depth=1) */
 QueueHandle_t       q_temp;     /* DS18B20 温度数据队列 */
-QueueHandle_t       q_mqtt;     /* MQTT 日志数据队列 (透传 vector_polar_t) */
+QueueHandle_t       q_log;      /* 日志上传数据队列 (透传 vector_polar_t) */
 EventGroupHandle_t  eg_sync;    /* 传感器同步事件组 */
+
 /* 心跳 LED 任务 */
 static void vLedTask(void *pvParameters)
 {
@@ -49,29 +51,65 @@ static void vLedTask(void *pvParameters)
     }
 }
 
+/* Wi-Fi 事件处理: 自动连接 + 打印 IP */
+static void wifi_event_handler(void *arg, esp_event_base_t base,
+                                int32_t id, void *data) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGW(TAG, "WiFi disconnected, reconnecting...");
+        esp_wifi_connect();
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
+        ESP_LOGI(TAG, "WiFi connected! IP: " IPSTR, IP2STR(&ev->ip_info.ip));
+        ESP_LOGI(TAG, "WebSocket: ws://" IPSTR ":%d/", IP2STR(&ev->ip_info.ip), WEBSOCKET_PORT);
+    }
+}
+
+/* Wi-Fi初始化 */
+static esp_err_t wifi_init(void) {
+    ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&cfg);
+
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                        wifi_event_handler, NULL, NULL);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                        wifi_event_handler, NULL, NULL);
+
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    wifi_config_t wifi_cfg = { .sta = { .ssid = WIFI_SSID, .password = WIFI_PASS } };
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+    esp_err_t re = esp_wifi_start();
+    ESP_LOGI(TAG, "WiFi connecting...");
+    return re;
+}
+
 #ifdef DEBUG
 /**
- * @brief 百分比斜坡测试 — 驱动层自动处理死区映射
- *
- * 循环: 0%→100% → 滑行 2s → 重复
- * motor_set_side() 将 1%~100% 内部映射到 [75%, 100%] 实际占空比
+ * @brief 小车转向能力测试
  */
 static void vTestVectorTask(void *pvParameters) {
     (void)pvParameters;
-    const int step_ms = 50;
-    int pct;
+    const int step_ms = 250;
+    int pct_a = 100, pct_b = 100;
 
     ESP_LOGI(TAG, "=== Percent Ramp: 0→100%%, step=%dms ===", step_ms);
 
     while (1) {
-        for (pct = 0; pct <= 100; pct++) {
-            motor_set((int8_t)pct, (int8_t)pct);
-            ESP_LOGI(TAG, "motor set %d %%", pct);
+        motor_set((int8_t)pct_a, (int8_t)pct_b);
+        while (pct_b != -100) {
+            pct_b -= 10;
+            ESP_LOGI(TAG, "motor set: A %d %%, B %d %%", pct_a, pct_b);
             vTaskDelay(pdMS_TO_TICKS(step_ms));
         }
-        ESP_LOGI(TAG, "--- Coast 2s ---");
-        motor_coast();
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        pct_b = 100;
+        pct_a -= 10;
+        if (pct_a == -100)
+            pct_a = 100;
     }
 }
 #endif
@@ -88,6 +126,11 @@ void app_main(void) {
 
     /* 1. 硬件驱动初始化 */
 
+    /* Wi-Fi */
+    if (wifi_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi init failed");
+        return;
+    }
     /* LiDAR 传感器驱动 */
     if (ld14p_init() != ESP_OK) {
         ESP_LOGE(TAG, "LD14P init failed");
@@ -106,19 +149,6 @@ void app_main(void) {
     if (flame_sensor_init() != ESP_OK) {
         ESP_LOGW(TAG, "Flame sensor GPIO init failed");
     }
-
-    /* 2. WiFi (MQTT 需要) */
-    ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
-    esp_netif_init();
-    esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    wifi_config_t wifi_cfg = { .sta = { .ssid = WIFI_SSID, .password = WIFI_PASS } };
-    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
-    esp_wifi_start();
-    ESP_LOGI(TAG, "WiFi connecting...");
 
     /* 3. 创建任务间通信对象 (句柄定义在文件顶部) */
 
@@ -140,10 +170,10 @@ void app_main(void) {
         ESP_LOGE(TAG, "q_temp creation failed");
         return;
     }
-    /* q_mqtt: MQTT 日志数据队列 (depth=41, 与 q_polar 一致) */
-    q_mqtt = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
-    if (q_mqtt == NULL) {
-        ESP_LOGE(TAG, "q_mqtt creation failed");
+    /* q_log: 日志上传数据队列 (depth=41, 与 q_polar 一致) */
+    q_log = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
+    if (q_log == NULL) {
+        ESP_LOGE(TAG, "q_log creation failed");
         return;
     }
     /* eg_sync: 用于确保传感器就绪的事件组 */
@@ -162,9 +192,10 @@ void app_main(void) {
     /* 火焰传感器任务，简单，快速完成 */
     xTaskCreate(flame_task, "flame_sensor", 2048, NULL, 7, NULL);
     /* 温度传感器任务，有时序要求 */
-    xTaskCreate(temp_task, "temp_sensor", 2048, NULL, 6, NULL);
-    /* MQTT 日志上传任务，低优先级，与数据流解耦 */
-    xTaskCreate(mqtt_task, "mqtt_log", 8192, NULL, 3, NULL);
+    xTaskCreate(temp_task, "temp_sensor", 4096, NULL, 6, NULL);
+    /* 日志上传任务 (WebSocket 服务端)，低优先级，与数据流解耦 */
+    // xTaskCreate(mqtt_task, "mqtt_log", 8192, NULL, 3, NULL);
+    xTaskCreate(websocket_task, "websocket_log", 8192, NULL, 3, NULL);
 #ifndef DEBUG
     /* APF 避障任务，较复杂，依赖雷达、温度传感器数据，读取队列后即释放事件组 */
     if (xTaskCreate(apf_task, "apf_task", 4096, NULL, 4, NULL) != pdPASS) {
@@ -173,17 +204,16 @@ void app_main(void) {
     }
 #endif
 #ifdef DEBUG
-    /* 测试向量生成任务 (验证电机驱动, 不与 APF 共存) */
-    if (xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL,
-                    4, NULL) != pdPASS) {
+    /* 测试向量生成任务 */
+    if (xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "TestVector task creation failed");
         return;
     }
 #endif
     /* 电机控制任务，较复杂，强时序要求 */
-    if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 8, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "Motor task creation failed");
-        return;
-    }
+    // if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 8, NULL) != pdPASS) {
+    //     ESP_LOGE(TAG, "Motor task creation failed");
+    //     return;
+    // }
     ESP_LOGI(TAG, "\n----------Leaving app_main, scheduler to be started----------\n\n");
 }
