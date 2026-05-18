@@ -24,7 +24,8 @@
     * 保守策略：4轮小车，使用 DRV8833 驱动两侧电机，单侧两电机并联
     * ~~激进策略：2轮平衡车，使用PID平衡控制~~
 4. 联网策略：
-    * 使用MQTT协议实时上传激光雷达点云等传感器数据
+    * ~~使用MQTT协议实时上传激光雷达点云等传感器数据~~
+    * 使用WebSocket实现数据云端上传
     * 利用云端的强大算力与激光雷达的点云数据，实现对场景的实时2D建模
 
 > 使用VL53L0X/激光雷达时若高温物体导致红外被干扰，可以考虑使用960nm滤光板（淘宝收藏有）
@@ -41,9 +42,9 @@
 * 4Hz读取火焰传感器读数，转化为简单的向量数据
 * 向量数据同步、APF算法运行（高优先级，阻塞等待事件组，含超时保护），输出笛卡尔控制向量
 * 采用EMA滤波平滑指令，并将控制向量转化为小车电机控制指令（最高优先级，8Hz周期性触发，确保系统周期稳定）
-* 基于MQTT协议的日志上传（数据读取阻塞，低优先级）
+* 基于~~MQTT~~WebSocket协议的日志上传（数据读取阻塞，低优先级）
 
-预计的加速优化方案：
+预计的加速优化方案（必要时）：
 
 1. 对于有关角度与三角函数换算的计算：采用直接查表法进行运算，能有效降低计算复杂度与延迟，另外在计算三角函数时，可以使用ESP提供的`cosf`与`sinf`函数
 2. 对于点阵等大规模矩阵计算，考虑使用ESP提供的ESP-NN或ESP-DSP库，
@@ -225,6 +226,7 @@ if (xQueueReceive(vector_queue, &vec, pdMS_TO_TICKS(100)) == pdTRUE) {
 5. [LD14P官方SDK](https://github.com/ldrobotSensorTeam/ldlidar_sl_sdk/tree/master)
 4. [乐动LD14P激光传感器开发手册](https://files.waveshare.com/upload/9/99/LD14P_Development_Manual.pdf)
 5. [乐动LD14P激光传感器数据手册](https://www.ldrobot.com/images/2023/03/02/LDROBOT_LD14P%20DataSheet_CN_v0.4_Wlmrp6QT.pdf)
+6. [案例](https://github.com/HumbertoDiego/lidar-experiments/blob/main/1-LD14P.md)
 
 #### 电机
 

@@ -28,7 +28,7 @@ typedef struct {
 extern QueueHandle_t        q_polar;    /* LD14P 数据队列 */
 extern QueueHandle_t        q_cart;     /* APF 计算结果队列，深度 1 */
 extern QueueHandle_t        q_temp;     /* DS18B20 温度数据队列 */
-extern QueueHandle_t        q_mqtt;     /* MQTT 日志数据队列 (透传 vector_polar_t) */
+extern QueueHandle_t        q_log;      /* 日志上传数据队列 (透传 vector_polar_t) */
 extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 任务间同步 ---------- */
@@ -36,11 +36,21 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define BIT_LIDAR_Q_READY      (1 << 0) /* q_polar 中有新的激光雷达数据 */
 #define BIT_TEMP_Q_READY       (1 << 1) /* q_temp 中有新的温度数据 */
 #define BIT_FLAME_Q_READY      (1 << 2) /* q_polar 中有新的火焰传感器数据 */
-#define BIT_MQTT_Q_READY       (1 << 3) /* q_mqtt 中有新的日志数据 */
+#define BIT_LOG_Q_READY        (1 << 3) /* q_log 中有新的一帧日志数据 */
 
 /* ---------- 板级硬件配置 ---------- */
 
-#define LED_PIN              48
+#define LED_PIN                 48  // 内置
+#define DS18B20_GPIO_PIN        8   /* DQ 数据线 (1-Wire) */
+#define MOTOR_LEFT_IN1_GPIO     4   /* 左侧 IN1 (AIN1), PWM */
+#define MOTOR_LEFT_IN2_GPIO     5   /* 左侧 IN2 (AIN2), Level */
+#define MOTOR_RIGHT_IN1_GPIO    6   /* 右侧 IN1 (BIN1), PWM */
+#define MOTOR_RIGHT_IN2_GPIO    7   /* 右侧 IN2 (BIN2), Level */
+#define FLAME_GPIO_MASK         ((1ULL << 15) | (1ULL << 14) | (1ULL << 13) | (1ULL << 12) | (1ULL << 11))
+#define LD14P_UART_TX_PIN       17  // <-> R <-> RX
+#define LD14P_UART_RX_PIN       18  // <-> Y <-> TX
+
+// LD14P：1(Red)<->RX, 2(Black)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
 
 /* ---------- LD14P 数据协议 ---------- */
 
@@ -52,17 +62,12 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 #define LD14P_UART_NUM       UART_NUM_1
 #define LD14P_UART_BAUD      115200
-#define LD14P_UART_TX_PIN    17 // <-> R <-> RX
-#define LD14P_UART_RX_PIN    18 // <-> Y <-> TX
 #define LD14P_UART_RX_BUF    2048
-
-// LD14P：1(Red)<->RX, 2(Blue)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
 
 /* ---------- 火焰传感器 ---------- */
 
 #define FLAME_SENSOR_COUNT      5
 #define FLAME_DETECT_MM        500.0f  /* 检测到火焰时的虚拟距离 (进入危险区) */
-#define FLAME_GPIO_MASK        ((1ULL << 11) | (1ULL << 12) | (1ULL << 13) | (1ULL << 14) | (1ULL << 15))
 
 /* ---------- Q_POLAR 队列容量 (LiDAR + 火焰传感器) ---------- */
 
@@ -70,7 +75,6 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- DS18B20 温度传感器 ---------- */
 
-#define DS18B20_GPIO_PIN      9       /* DQ 数据线 (1-Wire) */
 #define DS18B20_RES_BITS      10      /* 10-bit 精度 (0.25°C, 188ms 转换), 支持 4Hz */
 #define DS18B20_TASK_FREQ     4       /* 采样频率 (Hz) */
 
@@ -89,14 +93,11 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 
 /* ---------- 电机驱动硬件配置 ---------- */
 
-#define MOTOR_LEFT_IN1_GPIO    4        /* 左侧 IN1 (AIN1), PWM */
-#define MOTOR_LEFT_IN2_GPIO    5        /* 左侧 IN2 (AIN2), Level */
-#define MOTOR_RIGHT_IN1_GPIO   6        /* 右侧 IN1 (BIN1), PWM */
-#define MOTOR_RIGHT_IN2_GPIO   7        /* 右侧 IN2 (BIN2), Level */
-
-#define MOTOR_PWM_FREQ         20000    /* PWM 频率 20kHz (高于人耳听觉范围) */
+#define MOTOR_PWM_FREQ         20000    /* PWM 频率 20kHz */
 #define MOTOR_PWM_RES_BITS     10       /* 10-bit 分辨率 (0-1023) */
-#define MOTOR_MAX_DUTY         (((1U << MOTOR_PWM_RES_BITS) - 1) * 80U / 100U) /* 80% = 818 */
+#define MOTOR_MAX_DUTY         ((1U << MOTOR_PWM_RES_BITS) - 1)  /* 1023 = 100% */
+#define MOTOR_MIN_EFF_DUTY_FRAC 75      /* 能克服电机静摩擦力的最低有效占空比百分比，需根据实测情况设置 */
+#define MOTOR_MIN_EFF_DUTY     (MOTOR_MAX_DUTY * MOTOR_MIN_EFF_DUTY_FRAC / 100U)  /* 767 = 75% */
 
 #define MOTOR_CTL_HZ            8       /* 电机控制任务运行频率 (Hz) */
 #define MOTOR_CTL_PERIOD_MS     (1000 / MOTOR_CTL_HZ)  /* 125ms */
@@ -115,11 +116,12 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 #define MOTOR_DEADTIME_MS       20      /* 换向死区制动保持时长 (ms), 防止电流冲击 */
 #define MOTOR_CMD_QUEUE_DEPTH   1       /* 笛卡尔指令队列深度 (xQueueOverwrite 要求=1) */
 
-/* ---------- WiFi / MQTT ---------- */
+/* ---------- WiFi / 日志上传 (MQTT / WebSocket) ---------- */
 
-#define WIFI_SSID              "YOUR_SSID"
-#define WIFI_PASS              "YOUR_PASSWORD"
+#define WIFI_SSID              "TAP"
+#define WIFI_PASS              "qwertyuiop"
 #define MQTT_BROKER_URI        "mqtt://192.168.1.100:1883"
 #define MQTT_TOPIC             "esp32/sensors"
+#define WEBSOCKET_PORT         81
 
  // #define DEBUG

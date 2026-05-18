@@ -40,12 +40,8 @@ void temp_task(void *pvParameters) {
             continue;
         }
 
-        /* 轮询转换完成 (读时隙: 0=转换中, 1=完成) */
-        int timeout = 0;
-        while (!ds18b20_poll() && timeout < 1200) {
-            vTaskDelay(1);
-            timeout++;
-        }
+        /* 等待转换完成 (10-bit = 188ms, 留足余量) */
+        vTaskDelay(pdMS_TO_TICKS(200));
 
         float temp = ds18b20_read_temp();
         if (isnan((double)temp)) {
@@ -58,7 +54,7 @@ void temp_task(void *pvParameters) {
                     ESP_LOGW(TAG, "Temp skipped: q_temp occupied (skip #%lu)", skip_count);
                 }
             } else {
-                xQueueOverwrite(q_temp, &temp);
+                xQueueSend(q_temp, &temp, 0);
                 xEventGroupSetBits(eg_sync, BIT_TEMP_Q_READY);
                 skip_count = 0;
             }

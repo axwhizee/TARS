@@ -120,16 +120,16 @@ static motor_state_t motor_clamp_classify(float x, float y) {
  *   2. 差速:   left = linear - angular, right = linear + angular
  *   3. 比例保持: 若任一侧超出 [-1,1], 等比例缩放两侧
  *   4. IDLE 状态强制归零
- *   5. PWM: pwm = speed * MOTOR_MAX_DUTY
+ *   5. PWM: pwm = speed * 100 (%)
  *
- * @param x        EMA 滤波后的 x (mm)
- * @param y        EMA 滤波后的 y (mm)
- * @param state   当前电机状态
- * @param left_pwm  [out] 左轮 PWM 占空比
- * @param right_pwm [out] 右轮 PWM 占空比
+ * @param x         EMA 滤波后的 x (mm)
+ * @param y         EMA 滤波后的 y (mm)
+ * @param state     当前电机状态
+ * @param left_duty  [out] 左轮 PWM 占空比
+ * @param right_duty [out] 右轮 PWM 占空比
  */
 static void motor_diff_to_pwm(float x, float y, motor_state_t state,
-    int16_t *left_pwm, int16_t *right_pwm) {
+    int8_t *left_duty, int8_t *right_duty) {
     float linear = x / 6000.0f;
     float angular = y / 6000.0f * MOTOR_TURN_RATIO;
 
@@ -149,8 +149,8 @@ static void motor_diff_to_pwm(float x, float y, motor_state_t state,
         right = 0.0f;
     }
 
-    *left_pwm = (int16_t)(left * MOTOR_MAX_DUTY);
-    *right_pwm = (int16_t)(right * MOTOR_MAX_DUTY);
+    *left_duty = (int8_t)(left * 100.0f);
+    *right_duty = (int8_t)(right * 100.0f);
 }
 
 /* 换向死区判断 (工具) */
@@ -176,7 +176,7 @@ void motor_task(void *pvParameters) {
     /* 状态机 */
     motor_state_t prev_state = MOTOR_STATE_IDLE;
     motor_state_t new_state;
-    int16_t left_pwm, right_pwm;    // PWM 输出
+    int8_t left_duty, right_duty;
     TickType_t wake_time = xTaskGetTickCount();     // 固定周期调度
 
     ESP_LOGI(TAG, "Motor task started @ %dHz (period=%ums), alpha=%.3f tau=%.0fms",
@@ -209,11 +209,11 @@ void motor_task(void *pvParameters) {
         }
 
         /* ---- Step 4: 笛卡尔→差速 PWM ---- */
-        motor_diff_to_pwm(ema_x, ema_y, new_state, &left_pwm, &right_pwm);
+        motor_diff_to_pwm(ema_x, ema_y, new_state, &left_duty, &right_duty);
 
         /* ---- Step 5: 驱动输出 ---- */
-        motor_set(left_pwm, right_pwm);
-        ESP_LOGI(TAG, "Motor set with (L: %d, R: %d)\n", left_pwm, right_pwm);
+        motor_set(left_duty, right_duty);
+        ESP_LOGI(TAG, "Motor set with (L: %d, R: %d)\n", left_duty, right_duty);
 
         prev_state = new_state;
     }
