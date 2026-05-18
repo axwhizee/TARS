@@ -46,9 +46,9 @@ SAFE_RANGE_MM   = 6000.0
 COLOR_DANGER  = "#ff4444"
 COLOR_SAFE    = "#ffaa00"
 COLOR_OK      = "#44ff44"
-BG_COLOR      = "#0a0a14"
+BG_COLOR      = "#ffffff"
 GRID_COLOR    = "#222244"
-TEXT_COLOR    = "#cccccc"
+TEXT_COLOR    = "#000000"
 
 
 class RadarViewer:
@@ -120,14 +120,14 @@ class RadarViewer:
             color=TEXT_COLOR, fontsize=11, pad=18,
         )
 
-        # ── temperature overlay ──
-        self.temp_text = self.ax.text(
-            0.02, 0.02, "TEMP: --\u00b0C",
-            transform=self.ax.transAxes, color="#ff8844",
-            fontsize=14, fontweight="bold", fontfamily="monospace",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#111122",
-                      edgecolor="#333355", alpha=0.9),
-        )
+        # # ── temperature overlay ──
+        # self.temp_text = self.ax.text(
+        #     0.02, 0.02, "TEMP: --\u00b0C",
+        #     transform=self.ax.transAxes, color="#ff8844",
+        #     fontsize=14, fontweight="bold", fontfamily="monospace",
+        #     bbox=dict(boxstyle="round,pad=0.3", facecolor="#111122",
+        #               edgecolor="#333355", alpha=0.9),
+        # )
 
         # ── stats ──
         self.stats_text = self.ax.text(
