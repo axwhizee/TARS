@@ -410,7 +410,7 @@ function initChart() {
   });
 
   // 生成虚线圆数据 (0~360°，每 5° 一个点)
-  const circleData = step => Array.from({length: 73}, (_, i) => [i * 5, step]);
+  const circleData = step => Array.from({length: 73}, (_, i) => ({ value: [i * 5, step] }));
 
   const option = {
     backgroundColor: 'transparent',
@@ -689,7 +689,7 @@ function handleData(data) {
   // 解析向量 (过滤无效数据，与 Python 一致)
   const vectors = (data.vectors || []).filter(v => v.d > 0 && !isNaN(v.d) && v.d <= CONFIG.SAFE_MM);
   const allCount = (data.vectors || []).length;
-  const points = vectors.map(v => [v.a, v.d]);
+  const points = vectors.map(v => ({ value: [v.a, v.d] }));
 
   // 统计
   const danger = points.filter(p => p[1] <= CONFIG.DANGER_MM).length;

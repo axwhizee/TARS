@@ -100,9 +100,9 @@ static void vTestVectorTask(void *pvParameters) {
     ESP_LOGI(TAG, "=== Percent Ramp: 0→100%%, step=%dms ===", step_ms);
 
     while (1) {
-        motor_set((int8_t)pct_a, (int8_t)pct_b);
         while (pct_b != -100) {
             pct_b -= 10;
+            motor_set((int8_t)pct_a, (int8_t)pct_b);
             ESP_LOGI(TAG, "motor set: A %d %%, B %d %%", pct_a, pct_b);
             vTaskDelay(pdMS_TO_TICKS(step_ms));
         }
@@ -185,6 +185,8 @@ void app_main(void) {
 
     /* 4. 创建任务 */
 
+#ifndef DEBUG
+    motor_set(0, 0);    // 确保电机不动
     /* 心跳 LED，优先级最低 */
     xTaskCreate(vLedTask, "LedTask", 2048, NULL, 1, NULL);
     /* LIDAR 传感器任务，较复杂，依赖UART缓冲区 */
@@ -196,24 +198,18 @@ void app_main(void) {
     /* 日志上传任务 (WebSocket 服务端)，低优先级，与数据流解耦 */
     // xTaskCreate(mqtt_task, "mqtt_log", 8192, NULL, 3, NULL);
     xTaskCreate(websocket_task, "websocket_log", 8192, NULL, 3, NULL);
-#ifndef DEBUG
+    vTaskDelay(pdMS_TO_TICKS(1000)); 
     /* APF 避障任务，较复杂，依赖雷达、温度传感器数据，读取队列后即释放事件组 */
-    if (xTaskCreate(apf_task, "apf_task", 4096, NULL, 4, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "APF task creation failed");
-        return;
-    }
+    xTaskCreate(apf_task, "apf_task", 4096, NULL, 4, NULL);
+    /* 电机控制任务，较复杂，强时序要求 */
+    xTaskCreate(motor_task, "motor_task", 4096, NULL, 8, NULL);
 #endif
 #ifdef DEBUG
-    /* 测试向量生成任务 */
+    /* 测试地盘功能 */
     if (xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "TestVector task creation failed");
         return;
     }
 #endif
-    /* 电机控制任务，较复杂，强时序要求 */
-    // if (xTaskCreate(motor_task, "motor_task", 4096, NULL, 8, NULL) != pdPASS) {
-    //     ESP_LOGE(TAG, "Motor task creation failed");
-    //     return;
-    // }
     ESP_LOGI(TAG, "\n----------Leaving app_main, scheduler to be started----------\n\n");
 }

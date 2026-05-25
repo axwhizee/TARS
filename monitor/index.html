@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Radar Viewer</title>
+    <!-- 引入外部样式表 -->
+    <link rel="stylesheet" href="style.css">
+    <!-- ECharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+
+<body>
+
+    <header>
+        <div style="font-weight: bold; font-size: 16px; color: var(--accent);">ESP32 Radar View</div>
+        <div class="controls">
+            <input type="text" id="ipInput" value="192.168.1.100" placeholder="IP Address" style="width: 140px;">
+            <input type="number" id="portInput" value="81" placeholder="Port" style="width: 70px;">
+            <button id="connectBtn" class="btn-connect">连接</button>
+        </div>
+        <div id="statusArea" class="status">
+            <span class="dot"></span>
+            <span id="statusText">未连接</span>
+        </div>
+    </header>
+
+    <main>
+        <div id="chart-container"></div>
+    </main>
+
+    <footer>
+        <div class="data-label">Raw Data Output (Latest)</div>
+        <div id="json-viewer">// Waiting for data...</div>
+    </footer>
+
+    <!-- 引入外部脚本文件（放在body底部保证DOM已加载） -->
+    <script src="script.js"></script>
+</body>
+
+</html>

@@ -41,14 +41,47 @@ extern EventGroupHandle_t   eg_sync;    /* 传感器同步事件组 */
 /* ---------- 板级硬件配置 ---------- */
 
 #define LED_PIN                 48  // 内置
-#define DS18B20_GPIO_PIN        8   /* DQ 数据线 (1-Wire) */
-#define MOTOR_LEFT_IN1_GPIO     4   /* 左侧 IN1 (AIN1), PWM */
-#define MOTOR_LEFT_IN2_GPIO     5   /* 左侧 IN2 (AIN2), Level */
-#define MOTOR_RIGHT_IN1_GPIO    6   /* 右侧 IN1 (BIN1), PWM */
-#define MOTOR_RIGHT_IN2_GPIO    7   /* 右侧 IN2 (BIN2), Level */
-#define FLAME_GPIO_MASK         ((1ULL << 15) | (1ULL << 14) | (1ULL << 13) | (1ULL << 12) | (1ULL << 11))
+#define MOTOR_LEFT_IN1_GPIO     5   // 左侧 IN1 (AIN1), PWM
+#define MOTOR_LEFT_IN2_GPIO     6   // 左侧 IN2 (AIN2), Level
+#define MOTOR_RIGHT_IN1_GPIO    7   // 右侧 IN1 (BIN1), PWM
+#define MOTOR_RIGHT_IN2_GPIO    15  // 右侧 IN2 (BIN2), Level
 #define LD14P_UART_TX_PIN       17  // <-> R <-> RX
 #define LD14P_UART_RX_PIN       18  // <-> Y <-> TX
+#define FLAME_GPIO_MASK         ((1ULL << 16) | (1ULL << 14) | (1ULL << 13) | (1ULL << 12) | (1ULL << 11))
+#define DS18B20_GPIO_PIN        9   // DQ 数据线 (1-Wire)
+
+/*
+修复方案：
+1. 电机：
+    * 4 -> 5
+    * 5 -> 6
+    * 6 -> 7
+    * 7 -> 15
+2. 雷达：
+    * 17 -> 由MCU|17飞线到PCB|03
+    * 18 -> 由MCU|18飞线到PCB|43
+3. 火焰：
+    * 11
+    * 12
+    * 13
+    * 14
+    * 16 -> PCB|16飞线到飞线到PCB|18，暂不执行
+4. 温度：
+    * 8 -> 9
+MCU的3、46引脚已经被剪断，避免干扰电路
+*/
+
+// 原始设置，因为PCB设计失误，放弃
+// #define LED_PIN                 48  // 内置
+// #define MOTOR_LEFT_IN1_GPIO     4   // 左侧 IN1 (AIN1), PWM
+// #define MOTOR_LEFT_IN2_GPIO     5   // 左侧 IN2 (AIN2), Level
+// #define MOTOR_RIGHT_IN1_GPIO    6   // 右侧 IN1 (BIN1), PWM
+// #define MOTOR_RIGHT_IN2_GPIO    7   // 右侧 IN2 (BIN2), Level
+// TODO：STBY -> 15或16
+// #define LD14P_UART_TX_PIN       17  // <-> R <-> RX
+// #define LD14P_UART_RX_PIN       18  // <-> Y <-> TX
+// #define FLAME_GPIO_MASK         ((1ULL << 15) | (1ULL << 14) | (1ULL << 13) | (1ULL << 12) | (1ULL << 11))
+// #define DS18B20_GPIO_PIN        8   // DQ 数据线 (1-Wire)
 
 // LD14P：1(Red)<->RX, 2(Black)<->GND, 3(Yellow)<->TX, 4(Green)<->VCC
 

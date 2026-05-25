@@ -20,9 +20,7 @@
 
 static const char *TAG = "MOTOR ";
 
-/* ---------------------------------------------------------- */
-/* LEDC 通道映射                                                */
-/* ---------------------------------------------------------- */
+// LEDC 通道映射
 #define LEFT_IN1_CHANNEL  LEDC_CHANNEL_0
 #define LEFT_IN2_CHANNEL  LEDC_CHANNEL_1
 #define RIGHT_IN1_CHANNEL LEDC_CHANNEL_2
