@@ -1,10 +1,6 @@
 /**
  * @file mqtt_task.c
  * @brief MQTT 日志任务 — 接收 APF 转发数据 + 温度 → JSON → MQTT 发布
- *
- * 同步:
- *   等待 BIT_LOG_Q_READY | BIT_TEMP_Q_READY 双就绪 → 消费 q_log + q_temp
- *   → 清除两个事件位 (释放生产者) → 组装 JSON → MQTT 发布
  */
 #include "tasks/mqtt_task.h"
 #include "all_defs.h"

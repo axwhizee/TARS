@@ -1,5 +1,5 @@
 /**
- * ESP32 Radar Viewer Logic
+ * ESP32 Ridar Viewer Logic
  */
 
 const CONFIG = {

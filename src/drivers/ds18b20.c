@@ -190,7 +190,7 @@ static uint32_t res_to_conv_ms(uint8_t bits) {
 /* ────────── DS18B20 公开 API ────────── */
 
 esp_err_t ds18b20_init(void) {
-    gpio_num_t pin = (gpio_num_t)DS18B20_GPIO_PIN;
+    gpio_num_t pin = (gpio_num_t)DS18B20_PIN;
 
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << pin),
@@ -204,7 +204,7 @@ esp_err_t ds18b20_init(void) {
 
     /* 检测总线是否存在器件 */
     if (!ow_reset(pin)) {
-        ESP_LOGE(TAG, "No DS18B20 detected on GPIO%d", DS18B20_GPIO_PIN);
+        ESP_LOGE(TAG, "No DS18B20 detected on GPIO%d", DS18B20_PIN);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -222,15 +222,11 @@ esp_err_t ds18b20_init(void) {
     ow_write_byte(pin, DS18_COPY_SCRATCH);
     vTaskDelay(pdMS_TO_TICKS(15));  /* EEPROM 写入需 ≥10ms */
 
-    ESP_LOGI(TAG, "Ready on GPIO%d, %d-bit resolution (%.2f°C, %lums conv)",
-        DS18B20_GPIO_PIN, DS18B20_RES_BITS,
-        (double)(1.0f / (1 << (DS18B20_RES_BITS - 8))),
-        (unsigned long)res_to_conv_ms(DS18B20_RES_BITS));
     return ESP_OK;
 }
 
 esp_err_t ds18b20_start_conversion(void) {
-    gpio_num_t pin = (gpio_num_t)DS18B20_GPIO_PIN;
+    gpio_num_t pin = (gpio_num_t)DS18B20_PIN;
 
     if (!ow_reset(pin)) return ESP_ERR_TIMEOUT;
     ow_write_byte(pin, OW_SKIP_ROM);
@@ -240,11 +236,11 @@ esp_err_t ds18b20_start_conversion(void) {
 
 bool ds18b20_poll(void) {
     /* 读时隙: DS18B20 输出 0=转换中, 1=完成 */
-    return ow_read_bit((gpio_num_t)DS18B20_GPIO_PIN);
+    return ow_read_bit((gpio_num_t)DS18B20_PIN);
 }
 
 float ds18b20_read_temp(void) {
-    gpio_num_t pin = (gpio_num_t)DS18B20_GPIO_PIN;
+    gpio_num_t pin = (gpio_num_t)DS18B20_PIN;
 
     if (!ow_reset(pin)) {
         ESP_LOGW(TAG, "Bus reset failed during read");

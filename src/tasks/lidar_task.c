@@ -1,15 +1,6 @@
 /**
  * @file lidar_task.c
  * @brief LD14P 传感器任务 — 非阻塞跳过模式
- *
- * 数据流:
- *   UART1 → ld14p_feed_byte(byte)  → ld14p_frame_t*
- *         → ld14p_process_frame(frm) → 更新 cloud_360[], 返回 true=圈完成
- *         → ld14p_get_cloud(raw)    → vector_polar_t[360]
- *         → lidar_process(raw, out) → 降采样 360→36 点 (最小距离加权平均)
- *         → if (!BIT_LIDAR_Q_READY) → xQueueSend(q_polar) → 推送 36 点
- *                                    → xEventGroupSetBits(LIDAR_Q_READY)
- *         → else skip (APF 未消费上一帧)
  */
 #include "tasks/lidar_task.h"
 #include "drivers/ld14p.h"
@@ -54,15 +45,15 @@ static void lidar_process(const vector_polar_t raw[LD14P_POINTS_PER_REV],
 
 void ld14p_task(void *pvParameters) {
     (void)pvParameters;
-    ESP_LOGI(TAG, "Lidar task started @4Hz");
     uint32_t rev_count = 0;
     uint32_t skip_count = 0;
+    ESP_LOGI(TAG, "Lidar task started @4Hz");
 
     while (1) {
         /* ─── 非阻塞 drain UART ring buffer ─── */
         uint8_t buf[256];
         int len;
-        while ((len = uart_read_bytes(LD14P_UART_NUM, buf, sizeof(buf), pdMS_TO_TICKS(10))) > 0) {
+        while ((len = uart_read_bytes(LD14P_UART_NUM, buf, sizeof(buf), pdMS_TO_TICKS(25))) > 0) {
             for (int i = 0; i < len; i++) {
                 const ld14p_frame_t *frm = ld14p_feed_byte(buf[i]);
 

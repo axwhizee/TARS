@@ -1,8 +1,6 @@
 /**
  * @file flame_task.c
  * @brief 火焰传感器任务 — 4Hz GPIO 采样, 非阻塞跳过模式
- *
- * 若 BIT_FLAME_Q_READY 已置位 (APF 未消费上一帧), 跳过本周期.
  */
 #include "tasks/flame_task.h"
 #include "freertos/FreeRTOS.h"
@@ -39,11 +37,14 @@ esp_err_t flame_sensor_init(void) {
 void flame_task(void *pvParameters) {
     (void)pvParameters;
 
-    const TickType_t period = pdMS_TO_TICKS(250);   /* 4Hz */
+    const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ);    // 工作周期
+    TickType_t last_wake = xTaskGetTickCount();
     uint32_t skip_count = 0;
-    ESP_LOGI(TAG, "Flame task started @4Hz, GPIO [11,12,15,13,14]");
+    ESP_LOGI(TAG, "Flame task started @%dHz", SENSOR_FREQ);
 
     while (1) {
+        vTaskDelayUntil(&last_wake, period);    // 任务周期性运行
+
         if (!(xEventGroupGetBits(eg_sync) & BIT_FLAME_Q_READY)) {
             vector_polar_t data[FLAME_SENSOR_COUNT];
             for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
@@ -62,7 +63,5 @@ void flame_task(void *pvParameters) {
                 ESP_LOGW(TAG, "Flame skipped: q_polar occupied (skip #%lu)", skip_count);
             }
         }
-
-        vTaskDelay(period);
     }
 }

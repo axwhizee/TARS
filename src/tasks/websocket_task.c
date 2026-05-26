@@ -1,10 +1,6 @@
 /**
  * @file websocket_task.c
  * @brief WebSocket 服务端任务 — 接收 APF 转发数据 (+ 温度, 非阻塞) → JSON → WebSocket 推送
- *
- *   等待 BIT_LOG_Q_READY 就绪 → 消费 q_log
- *   → 温度有则取、无则跳过 (不阻塞雷达数据流)
- *   → 清除已消费事件位 → 组装 JSON → WebSocket 广播至所有已连接客户端
  */
 #include "tasks/websocket_task.h"
 #include "all_defs.h"
@@ -137,42 +133,32 @@ void websocket_task(void *pvParameters) {
     ESP_LOGI(TAG, "WebSocket server started on port %d", WEBSOCKET_PORT);
 
     while (1) {
-        xEventGroupWaitBits(
-            eg_sync,
+        xEventGroupWaitBits(eg_sync,
             BIT_LOG_Q_READY | BIT_TEMP_Q_READY,
-            pdFALSE,
-            pdTRUE,
-            portMAX_DELAY
-        );
+            pdFALSE, pdTRUE, portMAX_DELAY);
 
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-            xQueueReceive(q_log, &vectors[i], 0);
+            xQueueReceive(q_log, &vectors[i], 0);   // 接收极坐标数据
         }
-
         float temp = NAN;
-        xQueueReceive(q_temp, &temp, 0);
-
+        xQueueReceive(q_temp, &temp, 0);    // 接收温度数据
         xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY | BIT_TEMP_Q_READY);
-        if (!isnan((double)temp)) {
-            xEventGroupClearBits(eg_sync, BIT_TEMP_Q_READY);
-        }
-
         int64_t ts_us = esp_timer_get_time();
 
         cJSON *root = cJSON_CreateObject();
-        cJSON_AddNumberToObject(root, "ts", (double)ts_us);
-        cJSON_AddNumberToObject(root, "temp", (double)temp);
+        cJSON_AddNumberToObject(root, "ts", (double)ts_us);     // 时间戳
+        cJSON_AddNumberToObject(root, "temp", (double)temp);    // 温度数据
 
         cJSON *arr = cJSON_AddArrayToObject(root, "vectors");
-        for (int i = 0; i < Q_POLAR_DEPTH; i++) {
+        for (int i = 0; i < Q_POLAR_DEPTH; i++) {   // 所有向量数据
             cJSON *v = cJSON_CreateObject();
             cJSON_AddNumberToObject(v, "a", (double)vectors[i].angle_deg);
             cJSON_AddNumberToObject(v, "d", (double)vectors[i].distance_mm);
             cJSON_AddItemToArray(arr, v);
         }
 
-        char *json_str = cJSON_PrintUnformatted(root);
+        char *json_str = cJSON_PrintUnformatted(root);  // 转化为字节流
         if (json_str) {
             ws_send_all(json_str, strlen(json_str));
             ESP_LOGI(TAG, "Sent %d bytes to %d client(s)", (int)strlen(json_str), ws_count);

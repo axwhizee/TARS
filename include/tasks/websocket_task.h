@@ -1,12 +1,11 @@
+/**
+ * @file websocket_task.h
+ * @brief WebSocket 日志上传任务
+ */
 #pragma once
 #include "all_defs.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
+/**
+ * @brief WebSocket 日志上传任务入口
+ */
 void websocket_task(void *pvParameters);
-
-#ifdef __cplusplus
-}
-#endif

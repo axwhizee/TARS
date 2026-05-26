@@ -1,15 +1,6 @@
 /**
  * @file temp_task.c
  * @brief DS18B20 温度传感器任务 — 4Hz 周期性采样, 非阻塞跳过模式
- *
- * 数据流:
- *   ds18b20_start_conversion() → 轮询 ds18b20_poll() → ds18b20_read_temp()
- *   → if (!BIT_TEMP_Q_READY) → xQueueSend(q_temp)
- *                             → xEventGroupSetBits(TEMP_Q_READY)
- *   → else skip (MQTT 未消费上一帧)
- *
- * 周期: 250ms (4Hz), 禁 Tickless Idle 确保 vTaskDelay 可靠.
- * 10-bit 分辨率: 188ms 转换 + 10ms 读取 ≈ 200ms/cycle < 250ms.
  */
 #include "tasks/temp_task.h"
 #include "drivers/ds18b20.h"
@@ -25,18 +16,17 @@ static const char *TAG = "TEMP_TASK";
 void temp_task(void *pvParameters) {
     (void)pvParameters;
 
-    const TickType_t period = pdMS_TO_TICKS(1000 / DS18B20_TASK_FREQ);
+    const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ);    // 工作周期
     TickType_t last_wake = xTaskGetTickCount();
     uint32_t skip_count = 0;
-
-    ESP_LOGI(TAG, "Temperature task started @%dHz", DS18B20_TASK_FREQ);
+    ESP_LOGI(TAG, "Temperature task started @%dHz", SENSOR_FREQ);
 
     while (1) {
+        vTaskDelayUntil(&last_wake, period);    // 任务周期性运行
+
         if (ds18b20_start_conversion() != ESP_OK) {
             ESP_LOGW(TAG, "Conversion start failed, retrying in %lums",
-                (unsigned long)(1000 / DS18B20_TASK_FREQ));
-            vTaskDelay(period);
-            last_wake = xTaskGetTickCount();
+                (unsigned long)(1000 / SENSOR_FREQ));
             continue;
         }
 
@@ -60,6 +50,5 @@ void temp_task(void *pvParameters) {
             }
         }
 
-        vTaskDelayUntil(&last_wake, period);
     }
 }
