@@ -161,7 +161,7 @@ void websocket_task(void *pvParameters) {
         char *json_str = cJSON_PrintUnformatted(root);  // 转化为字节流
         if (json_str) {
             ws_send_all(json_str, strlen(json_str));
-            ESP_LOGI(TAG, "Sent %d bytes to %d client(s)", (int)strlen(json_str), ws_count);
+            ESP_LOGI(TAG, "Sent %d bytes to %d client(s)\n", (int)strlen(json_str), ws_count);
             free(json_str);
         }
         cJSON_Delete(root);

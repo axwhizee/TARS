@@ -41,13 +41,13 @@ const ld14p_frame_t *ld14p_feed_byte(uint8_t byte);
 /**
  * @brief 通过角度插值 + 圈检测，解析一帧, 更新点云
  * @param frm 读取的完整 LD14P 数据帧
- * @return ESP_OK，表示完成完整一圈
+ * @return true，表示完成完整一圈（上层应取点云）；false，表示解析完毕但未完成一圈
  */
-esp_err_t ld14p_process_frame(const ld14p_frame_t *frm);
+bool ld14p_process_frame(const ld14p_frame_t *frm);
 
 /**
  * @brief 获取当前 360° 点云快照，并返回有效点数
  * @param out 完整的 360 点雷达点云
  * @return 有效点数
  */
-uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV]);
+uint16_t ld14p_get_cloud(vector_polar_t (*out)[LD14P_POINTS_PER_REV]);

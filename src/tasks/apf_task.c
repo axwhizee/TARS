@@ -44,6 +44,7 @@ static inline float repulse_weight(float distance) {
 
 void apf_task(void *pvParameters) {
     (void)pvParameters;
+    const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ);    // 等待周期
     vector_polar_t  batch[Q_POLAR_DEPTH];  // 批量读取缓冲区
     vector_polar_t  dummy, point;
     vector_cart_t   result;
@@ -54,9 +55,9 @@ void apf_task(void *pvParameters) {
         APF_ATTRACT_GAIN, APF_REPULSE_GAIN, APF_DANGER_RANGE, APF_SAFE_RANGE);
 
     while (1) {
-        // 阻塞等待事件组就绪
+        // 阻塞等待事件组就绪（超时匹配传感器周期）
         EventBits_t bits = xEventGroupWaitBits(eg_sync, BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY,
-            pdFALSE, pdTRUE, pdMS_TO_TICKS(50));
+            pdFALSE, pdTRUE, period);
 
         if ((bits & (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) != (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) {
             ESP_LOGW(TAG, "Sensor sync timeout");   // 传感器数据等待超时
@@ -111,7 +112,7 @@ void apf_task(void *pvParameters) {
 
         xQueueOverwrite(q_cart, &result);
         // 添加换行，表示一次完整任务流程结束
-        ESP_LOGI(TAG, "F_cmd = (%.0f,%.0f) | danger=%d safe=%d noise=%d\n",
+        ESP_LOGI(TAG, "F_cmd = (%.0f,%.0f) | danger=%d safe=%d noise=%d",
             result.dx, result.dy, danger_cnt, safe_cnt, noise_cnt);
     }
 }

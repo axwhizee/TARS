@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief 主入口 — 所有硬件初始化 + 任务创建
+ * @brief 主入口：所有硬件初始化 + 任务创建
  */
 #include "all_defs.h"
 #include "driver/gpio.h"
@@ -28,7 +28,7 @@
 
 static const char *TAG = "MAIN";
 
-// 全局 RTOS 句柄 (供所有任务模块通过 extern 引用)
+// 全局 RTOS 句柄
 QueueHandle_t        q_polar;    // LD14P 数据队列
 QueueHandle_t        q_cart;     // APF 计算结果队列
 QueueHandle_t        q_temp;     // DS18B20 温度数据队列
@@ -36,8 +36,7 @@ QueueHandle_t        q_log;      // 日志上传数据队列 (透传 vector_pola
 EventGroupHandle_t   eg_sync;    // 传感器同步事件组
 
 // 心跳 LED 任务
-static void vLedTask(void *pvParameters)
-{
+static void vLedTask(void *pvParameters) {
     (void)pvParameters;
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << LED_PIN),
@@ -51,39 +50,47 @@ static void vLedTask(void *pvParameters)
     }
 }
 
-// Wi-Fi 事件处理: 自动连接 + 打印 IP
+// Wi-Fi 事件处理（AP 模式）
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "WiFi disconnected, reconnecting...");
-        esp_wifi_connect();
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "WiFi connected! IP: " IPSTR, IP2STR(&ev->ip_info.ip));
-        ESP_LOGI(TAG, "WebSocket: ws://" IPSTR ":%d/", IP2STR(&ev->ip_info.ip), WEBSOCKET_PORT);
+    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) {
+        ESP_LOGI(TAG, "WiFi AP started");
     }
 }
 
-// Wi-Fi初始化
-static esp_err_t wifi_init(void) {
-    ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
+// Wi-Fi 初始化（AP 模式, 无加密, 静态 IP 192.168.1.1/24）
+static esp_err_t wifi_init_ap(void) {
+    ESP_LOGI(TAG, "Starting WiFi AP: %s", WIFI_SSID);
     esp_netif_init();
     esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
+
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+
+    esp_netif_ip_info_t ip_info;
+    esp_netif_str_to_ip4("192.168.1.1", &ip_info.ip);
+    esp_netif_str_to_ip4("192.168.1.1", &ip_info.gw);
+    esp_netif_str_to_ip4("255.255.255.0", &ip_info.netmask);
+    esp_netif_dhcps_stop(ap_netif);
+    esp_netif_set_ip_info(ap_netif, &ip_info);
+    esp_netif_dhcps_start(ap_netif);
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
 
-    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                        wifi_event_handler, NULL, NULL);
-    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                        wifi_event_handler, NULL, NULL);
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL);
 
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    wifi_config_t wifi_cfg = { .sta = { .ssid = WIFI_SSID, .password = WIFI_PASS } };
-    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    wifi_config_t wifi_cfg = {
+        .ap = {
+            .ssid = WIFI_SSID,
+            .ssid_len = 0,
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN,
+        },
+    };
+    esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg);
     esp_err_t re = esp_wifi_start();
-    ESP_LOGI(TAG, "WiFi connecting...");
+
+    ESP_LOGI(TAG, "AP ready: 192.168.1.1, WebSocket: ws://192.168.1.1:%d/", WEBSOCKET_PORT);
     return re;
 }
 
@@ -125,8 +132,8 @@ void app_main(void) {
 
     // 1. 硬件驱动初始化
 
-    // Wi-Fi
-    if (wifi_init() != ESP_OK) {
+    // Wi-Fi (AP 模式)
+    if (wifi_init_ap() != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi init failed");
         return;
     }

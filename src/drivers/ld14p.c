@@ -91,7 +91,7 @@ const ld14p_frame_t *ld14p_feed_byte(uint8_t byte) {
     return NULL;
 }
 
-esp_err_t ld14p_process_frame(const ld14p_frame_t *frm) {
+bool ld14p_process_frame(const ld14p_frame_t *frm) {
     /* 
     圈检测: 角度 >300°→<60° 即穿过 0° 线, 配合 150ms 防抖
     注意: revolution_flag 在本帧置位, 但 cloud_360 中的点已由前面的帧填满
@@ -115,20 +115,16 @@ esp_err_t ld14p_process_frame(const ld14p_frame_t *frm) {
         cloud_360[deg] = frm->points[i];                 // 覆盖写入
     }
 
-    // 消费标志: 上层每圈处理一次
-    if (revolution_flag) {
-        revolution_flag = false;
-        return ESP_OK;
-    }
-    return ESP_OK;
+    return revolution_flag ? (revolution_flag = false, true) : false;
 }
 
-uint32_t ld14p_get_cloud(vector_polar_t out[LD14P_POINTS_PER_REV]) {
-    uint32_t valid = 0;
+// 传递数组指针
+uint16_t ld14p_get_cloud(vector_polar_t (*out)[LD14P_POINTS_PER_REV]) {
+    uint16_t valid = 0;
     for (int i = 0; i < LD14P_POINTS_PER_REV; i++) {
-        out[i].angle_deg = (float)i;
-        out[i].distance_mm = (float)cloud_360[i].distance;
-        if (cloud_360[i].distance < 60000) valid++;      /* 0xFFFF = 无效 */
+        (*out)[i].angle_deg = (float)i;     // 直接对应 360 点的整数角度
+        (*out)[i].distance_mm = (float)cloud_360[i].distance;
+        if (cloud_360[i].distance < 6000) valid++;  // 6000mm 以内为有效感知范围
     }
     return valid;
 }

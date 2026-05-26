@@ -1,6 +1,7 @@
 /**
  * @file all_defs.h
  * @brief 项目公共定义、数据结构和RTOS句柄
+ * 
  * 所有数据的单位统一为：距离mm，时间ms，角度°
  */
 #pragma once
@@ -13,8 +14,7 @@
 
 // WiFi 与全局配置
 
-#define WIFI_SSID           "TAP"
-#define WIFI_PASS           "qwertyuiop"
+#define WIFI_SSID           "APF-NVC"
 #define MQTT_BROKER_URI     "mqtt://192.168.1.100:1883"
 #define MQTT_TOPIC          "esp32/sensors"
 #define WEBSOCKET_PORT      81
@@ -97,9 +97,10 @@ MCU的3、46引脚已经被剪断，避免干扰电路
 
 // LD14P 配置
 
-#define LD14P_POINTS_PER_PACK   12
-#define LD14P_POINTS_PER_REV    360
-#define LIDAR_SECTORS           36          // 降采样后的点数
+#define LD14P_POINTS_PER_PACK   12          // 每个雷达数据帧包含的点数量
+#define LD14P_POINTS_PER_REV    360         // 雷达完整一周的点云数量
+#define LIDAR_SECTORS           36          // 降采样后的点数，请确保该值是360的因数
+#define LIDAR_MIN_WEIGHT        2           // 区间最小值权重，在降采样时对区间最小值会加权
 #define LD14P_UART_NUM          UART_NUM_1  // 通信串口
 #define LD14P_UART_BAUD         115200      // 波特率
 #define LD14P_UART_RX_BUF       2048        // 接收缓冲区大小
