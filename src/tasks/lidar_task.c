@@ -23,12 +23,12 @@ static void lidar_process(const vector_polar_t raw[LD14P_POINTS_PER_REV],
     vector_polar_t out[LIDAR_SECTORS]) {
     // 计算每个降采样区间的点数
     const int sector_width = LD14P_POINTS_PER_REV / LIDAR_SECTORS;
-    float d_min = 65535.0f, sum = 0.0f;
 
     for (int s = 0; s < LIDAR_SECTORS; s++) {
         int base = (s * sector_width);          // 区间起始点位置
         int end = ((s + 1) * sector_width);     // 区间终止点位置
 
+        float d_min = 65535.0f, sum = 0.0f;
         for (int j = base; j < end; j++) {  // 寻找最小值
             float d_tmp = raw[j].distance_mm;
             sum += d_tmp;

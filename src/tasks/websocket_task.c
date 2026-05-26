@@ -133,16 +133,15 @@ void websocket_task(void *pvParameters) {
     ESP_LOGI(TAG, "WebSocket server started on port %d", WEBSOCKET_PORT);
 
     while (1) {
-        xEventGroupWaitBits(eg_sync,
-            BIT_LOG_Q_READY | BIT_TEMP_Q_READY,
-            pdFALSE, pdTRUE, portMAX_DELAY);
+        xEventGroupWaitBits(eg_sync, BIT_LOG_Q_READY,
+            pdFALSE, pdFALSE, portMAX_DELAY);       // 只等日志就绪
 
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
             xQueueReceive(q_log, &vectors[i], 0);   // 接收极坐标数据
         }
         float temp = NAN;
-        xQueueReceive(q_temp, &temp, 0);    // 接收温度数据
+        xQueueReceive(q_temp, &temp, 0);    // 温度可选，非阻塞读取
         xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY | BIT_TEMP_Q_READY);
         int64_t ts_us = esp_timer_get_time();
 

@@ -99,8 +99,8 @@ MCU的3、46引脚已经被剪断，避免干扰电路
 
 #define LD14P_POINTS_PER_PACK   12          // 每个雷达数据帧包含的点数量
 #define LD14P_POINTS_PER_REV    360         // 雷达完整一周的点云数量
-#define LIDAR_SECTORS           36          // 降采样后的点数，请确保该值是360的因数
-#define LIDAR_MIN_WEIGHT        2           // 区间最小值权重，在降采样时对区间最小值会加权
+#define LIDAR_SECTORS           72          // 降采样后的点数，请确保该值是360的因数
+#define LIDAR_MIN_WEIGHT        3 - 1       // 区间最小值权重，在降采样时对区间最小值会加权
 #define LD14P_UART_NUM          UART_NUM_1  // 通信串口
 #define LD14P_UART_BAUD         115200      // 波特率
 #define LD14P_UART_RX_BUF       2048        // 接收缓冲区大小

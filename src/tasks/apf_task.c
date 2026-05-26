@@ -44,7 +44,7 @@ static inline float repulse_weight(float distance) {
 
 void apf_task(void *pvParameters) {
     (void)pvParameters;
-    const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ);    // 等待周期
+    const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ + 10);    // 等待周期（+10ms 余量）
     vector_polar_t  batch[Q_POLAR_DEPTH];  // 批量读取缓冲区
     vector_polar_t  dummy, point;
     vector_cart_t   result;

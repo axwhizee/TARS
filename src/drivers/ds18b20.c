@@ -1,14 +1,6 @@
 /**
  * @file ds18b20.c
  * @brief DS18B20 数字温度计 1-Wire 底层驱动实现
- *
- * 关键设计:
- *   - GPIO 开漏模式 (OUTPUT_OD) 模拟 1-Wire 双向总线
- *   - 所有 1-Wire 位操作在关中断保护下执行, 保证 μs 级时序
- *   - Dallas CRC8 (多项式 X^8+X^5+X^4+1) 验证暂存器数据完整性
- *   - 外部供电模式: VDD 接 3.3V, DQ 外接 4.7KΩ 上拉
- *
- * ROM 指令: 本驱动仅支持单器件, 始终使用 Skip ROM [CCh]
  */
 #include "drivers/ds18b20.h"
 #include "freertos/FreeRTOS.h"
@@ -20,16 +12,16 @@
 
 static const char *TAG = "DS18B20";
 
-/* ────────── 1-Wire ROM 指令码 ────────── */
+// 1-Wire ROM 指令码
 #define OW_SKIP_ROM         0xCC    /* 跳过 ROM 匹配, 仅单器件 */
 
-/* ────────── DS18B20 功能指令码 ────────── */
+// DS18B20 功能指令码
 #define DS18_CONVERT_T      0x44    /* 启动温度转换 */
 #define DS18_WRITE_SCRATCH  0x4E    /* 写暂存器 (TH, TL, config) */
 #define DS18_READ_SCRATCH   0xBE    /* 读暂存器 (9 字节) */
 #define DS18_COPY_SCRATCH   0x48    /* 暂存器 → EEPROM 保存 */
 
-/* ────────── 1-Wire 时序常量 (μs) ────────── */
+// 1-Wire 时序常量 (μs)
 #define OW_RST_LOW          480     /* 复位低电平持续时间 */
 #define OW_RST_WAIT         70      /* 释放后等待存在脉冲 */
 #define OW_RST_TAIL         410     /* 存在脉冲尾部等待 */
@@ -38,7 +30,7 @@ static const char *TAG = "DS18B20";
 #define OW_SLOT_TOTAL       60      /* 时隙总时长 (最小 60μs) */
 #define OW_RECOVERY         1       /* 时隙间恢复 */
 
-/* ────────── Dallas 1-Wire CRC8 查表 ────────── */
+// Dallas 1-Wire CRC8 查表
 static const uint8_t CRC_TABLE[256] = {
     0x00, 0x5E, 0xBC, 0xE2, 0x61, 0x3F, 0xDD, 0x83,
     0xC2, 0x9C, 0x7E, 0x20, 0xA3, 0xFD, 0x1F, 0x41,
@@ -81,8 +73,7 @@ static uint8_t dallas_crc8(const uint8_t *data, uint8_t len) {
     return crc;
 }
 
-/* ────────── 1-Wire 位操作 (关中断保护 μs 级时序) ────────── */
-
+// 1-Wire 位操作（关中断保护 μs 级时序）
 static inline void ow_low(gpio_num_t pin) {
     gpio_set_level(pin, 0);
 }
@@ -167,14 +158,13 @@ static uint8_t ow_read_byte(gpio_num_t pin) {
     return byte;
 }
 
-/* ────────── DS18B20 配置寄存器值 (TH=75°C, TL=70°C, 不同分辨率) ────────── */
-
+// DS18B20 配置寄存器值（TH=75°C, TL=70°C, 不同分辨率）
 static uint8_t res_to_config(uint8_t bits) {
     switch (bits) {
         case  9: return 0x1F;
         case 10: return 0x3F;
         case 11: return 0x5F;
-        default: return 0x7F;   /* 12-bit */
+        default: return 0x7F;   // 12-bit
     }
 }
 
@@ -187,14 +177,13 @@ static uint32_t res_to_conv_ms(uint8_t bits) {
     }
 }
 
-/* ────────── DS18B20 公开 API ────────── */
-
+// DS18B20 公开 API
 esp_err_t ds18b20_init(void) {
     gpio_num_t pin = (gpio_num_t)DS18B20_PIN;
 
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << pin),
-        .mode = GPIO_MODE_OUTPUT_OD,      /* 开漏: 可拉低或释放 */
+        .mode = GPIO_MODE_INPUT_OUTPUT_OD,      /* 开漏 + 输入: 可拉低/释放/读取总线电平 */
         .pull_up_en = GPIO_PULLUP_ENABLE,       /* 内部上拉 (仍需外接 4.7KΩ) */
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
