@@ -3,7 +3,7 @@
  * @brief DS18B20 数字温度计 1-Wire 驱动
  */
 #pragma once
-#include "all_defs.h"
+#include "apf_common.h"
 
 /**
  * @brief 初始化 DS18B20 驱动

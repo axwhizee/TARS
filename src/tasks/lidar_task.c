@@ -4,7 +4,7 @@
  */
 #include "tasks/lidar_task.h"
 #include "drivers/ld14p.h"
-#include "all_defs.h"
+#include "apf_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"

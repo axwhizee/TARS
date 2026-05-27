@@ -3,7 +3,7 @@
  * @brief 电机驱动底层 API (DRV8833 IN/IN + LEDC PWM)
  */
 #pragma once
-#include "all_defs.h"
+#include "apf_common.h"
 
 /**
  * @brief 初始化电机驱动 (配置 GPIO + LEDC PWM 通道)

@@ -3,7 +3,7 @@
  * @brief LD14P 传感器任务 — 非阻塞跳过模式
  */
 #pragma once
-#include "all_defs.h"
+#include "apf_common.h"
 
 /**
  * @brief LD14P 激光雷达任务入口

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Radar Viewer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="brand">ESP32 Radar Viewer</div>
+        <div class="controls">
+            <input type="text" id="ipInput" value="192.168.1.1" placeholder="IP">
+            <input type="number" id="portInput" value="80" placeholder="Port" style="width:60px">
+            <button id="connectBtn" class="btn-connect">连接</button>
+        </div>
+        <div class="status disconnected">
+            <span class="dot"></span>
+            <span id="statusText">未连接</span>
+        </div>
+    </header>
+    <main>
+        <canvas id="radar-canvas"></canvas>
+        <div class="overlay temp-overlay">
+            <div class="label">环境温度</div>
+            <div class="value" id="tempDisplay">-- °C</div>
+        </div>
+        <div class="overlay stats-overlay">
+            <div class="stat"><span class="stat-dot" style="background:#ff4444"></span>危险 <b id="statDanger">0</b></div>
+            <div class="stat"><span class="stat-dot" style="background:#44ff44"></span>安全 <b id="statSafe">0</b></div>
+            <div class="stat"><span class="stat-dot" style="background:#00d4ff"></span>总计 <b id="statTotal">0</b></div>
+        </div>
+    </main>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@
  * @brief 人工势场法 (APF) 避障任务
  */
 #pragma once
-#include "all_defs.h"
+#include "apf_common.h"
 
 /**
  * @brief APF 避障任务入口

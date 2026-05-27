@@ -14,4 +14,5 @@ idf_component_register(
         esp_wifi
         json
         nvs_flash
+        spiffs
 )

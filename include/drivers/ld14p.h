@@ -3,7 +3,7 @@
  * @brief LD14P 激光雷达驱动
  */
 #pragma once
-#include "all_defs.h"
+#include "apf_common.h"
 
 #define FRAME_LEN        47
 

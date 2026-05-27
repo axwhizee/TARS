@@ -3,7 +3,7 @@
  * @brief 火焰传感器任务 — 5 路 GPIO 检测 + 虚拟障碍物注入
  */
 #pragma once
-#include "all_defs.h"
+#include "apf_common.h"
 
 // 火焰传感器初始化
 esp_err_t flame_sensor_init(void);

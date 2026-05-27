@@ -1,5 +1,5 @@
 /**
- * @file all_defs.h
+ * @file apf_common.h
  * @brief 项目公共定义、数据结构和RTOS句柄
  * 
  * 所有数据的单位统一为：距离mm，时间ms，角度°
@@ -14,11 +14,9 @@
 
 // WiFi 与全局配置
 
-#define WIFI_SSID           "APF-NVC"
-#define MQTT_BROKER_URI     "mqtt://192.168.1.100:1883"
-#define MQTT_TOPIC          "esp32/sensors"
-#define WEBSOCKET_PORT      81
-// 传感器同步频率，直接决定温度/火焰传感器采样频率，间接影响APF法处理频率，取决于雷达频率
+#define WIFI_SSID           "APF-NVC"   // 未加密的开发 AP
+#define WEBSOCKET_PORT      80      // HTTP 协议的默认端口
+// 传感器同步频率，直接决定温度/火焰传感器采样频率，间接影响APF法处理频率，取决于雷达频率（2~8Hz）
 #define SENSOR_FREQ         4
 
 // 极坐标向量（统一传感器数据）
@@ -33,7 +31,7 @@ typedef struct {
     float dy;   // 侧向
 } vector_cart_t;
 
-// RTOS 全局句柄（在 main 中声明并分配内存）
+// RTOS 全局句柄（已在 main 中声明并分配内存）
 
 extern QueueHandle_t        q_polar;    // LD14P 数据队列
 extern QueueHandle_t        q_cart;     // APF 计算结果队列，深度 1

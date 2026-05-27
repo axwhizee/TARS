@@ -1,14 +1,28 @@
 /**
  * @file main.c
- * @brief 主入口：所有硬件初始化 + 任务创建
+ * @brief 主入口 — 系统初始化 → 硬件驱动 → RTOS 通信对象 → 任务创建
+ *
+ * 启动流程:
+ *   app_main() ->
+ *     1. sys_nvs_init()       — NVS flash 存储
+ *     2. sys_spiffs_init()    — SPIFFS 挂载 (网页文件)
+ *     3. sys_wifi_init()      — Wi-Fi AP 启动 (192.168.1.1:80)
+ *     4. 硬件驱动初始化        — LD14P, DRV8833, DS18B20, Flame
+ *     5. 队列 + 事件组创建     — RTOS IPC 基础设施
+ *     6. xTaskCreate ×7       — 传感器/控制/Web 任务
+ *
+ * app_main() 返回后 FreeRTOS 调度器自动启动.
+ * 所有单位: 距离 mm, 时间 ms, 角度 °.
  */
-#include "all_defs.h"
+#include "apf_common.h"
+#include "sys_init.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
+
 #include "drivers/ld14p.h"
 #include "drivers/ds18b20.h"
 #include "drivers/drv8833.h"
@@ -17,25 +31,19 @@
 #include "tasks/temp_task.h"
 #include "tasks/apf_task.h"
 #include "tasks/motor_task.h"
-// #include "tasks/mqtt_task.h"
-#include "tasks/websocket_task.h"
-#include "nvs_flash.h"
-#include "esp_netif.h"
-#include "esp_event.h"
-#include "esp_wifi.h"
-
-// #define DEBUG
+#include "tasks/web_task.h"
 
 static const char *TAG = "MAIN";
 
-// 全局 RTOS 句柄
-QueueHandle_t        q_polar;    // LD14P 数据队列
-QueueHandle_t        q_cart;     // APF 计算结果队列
-QueueHandle_t        q_temp;     // DS18B20 温度数据队列
-QueueHandle_t        q_log;      // 日志上传数据队列 (透传 vector_polar_t)
-EventGroupHandle_t   eg_sync;    // 传感器同步事件组
+// 全局 RTOS 通信对象 (定义在此, extern 供所有任务引用)
 
-// 心跳 LED 任务
+QueueHandle_t        q_polar;   /* LD14P + 火焰传感器极坐标数据 */
+QueueHandle_t        q_cart;    /* APF 笛卡尔合力结果 (xQueueOverwrite, depth=1) */
+QueueHandle_t        q_temp;    /* DS18B20 温度数据 (depth=4) */
+QueueHandle_t        q_log;     /* 日志透传队列 (vector_polar_t, 供 web_task 读取) */
+EventGroupHandle_t   eg_sync;   /* 传感器就绪 + 日志就绪事件组 */
+
+// 心跳 LED (prio 1, 1Hz)
 static void vLedTask(void *pvParameters) {
     (void)pvParameters;
     gpio_config_t io_conf = {
@@ -50,172 +58,85 @@ static void vLedTask(void *pvParameters) {
     }
 }
 
-// Wi-Fi 事件处理（AP 模式）
-static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) {
-        ESP_LOGI(TAG, "WiFi AP started");
-    }
-}
-
-// Wi-Fi 初始化（AP 模式, 无加密, 静态 IP 192.168.1.1/24）
-static esp_err_t wifi_init_ap(void) {
-    ESP_LOGI(TAG, "Starting WiFi AP: %s", WIFI_SSID);
-    esp_netif_init();
-    esp_event_loop_create_default();
-
-    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
-
-    esp_netif_ip_info_t ip_info;
-    esp_netif_str_to_ip4("192.168.1.1", &ip_info.ip);
-    esp_netif_str_to_ip4("192.168.1.1", &ip_info.gw);
-    esp_netif_str_to_ip4("255.255.255.0", &ip_info.netmask);
-    esp_netif_dhcps_stop(ap_netif);
-    esp_netif_set_ip_info(ap_netif, &ip_info);
-    esp_netif_dhcps_start(ap_netif);
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
-
-    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL);
-
-    esp_wifi_set_mode(WIFI_MODE_AP);
-    wifi_config_t wifi_cfg = {
-        .ap = {
-            .ssid = WIFI_SSID,
-            .ssid_len = 0,
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN,
-        },
-    };
-    esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg);
-    esp_err_t re = esp_wifi_start();
-
-    ESP_LOGI(TAG, "AP ready: 192.168.1.1, WebSocket: ws://192.168.1.1:%d/", WEBSOCKET_PORT);
-    return re;
-}
-
 #ifdef DEBUG
-/**
- * @brief 小车转向能力测试
- */
 static void vTestVectorTask(void *pvParameters) {
     (void)pvParameters;
     const int step_ms = 250;
     int pct_a = 100, pct_b = 100;
 
-    ESP_LOGI(TAG, "=== Percent Ramp: 0→100%%, step=%dms ===", step_ms);
+    ESP_LOGI(TAG, "=== Motor ramp test: 0→100%%, step=%dms ===", step_ms);
 
     while (1) {
         while (pct_b != -100) {
             pct_b -= 10;
             motor_set((int8_t)pct_a, (int8_t)pct_b);
-            ESP_LOGI(TAG, "motor set: A %d %%, B %d %%", pct_a, pct_b);
+            ESP_LOGI(TAG, "motor set: A %d%%, B %d%%", pct_a, pct_b);
             vTaskDelay(pdMS_TO_TICKS(step_ms));
         }
         pct_b = 100;
         pct_a -= 10;
-        if (pct_a == -100)
-            pct_a = 100;
+        if (pct_a == -100) pct_a = 100;
     }
 }
 #endif
 
 void app_main(void) {
-    ESP_LOGI(TAG, "System Init");
+    ESP_LOGI(TAG, "\nSystem Initializing...\n");
 
-    // 0. NVS (WiFi 需要)
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
-    }
+    // 1. 系统级初始化 — NVS → SPIFFS → Wi-Fi AP
 
-    // 1. 硬件驱动初始化
+    if (sys_nvs_init()    != ESP_OK) { ESP_LOGE(TAG, "NVS init failed"); return; }
+    if (sys_spiffs_init() != ESP_OK) { ESP_LOGE(TAG, "SPIFFS init failed"); return; }
+    if (sys_wifi_init()   != ESP_OK) { ESP_LOGE(TAG, "Wi-Fi init failed"); return; }
 
-    // Wi-Fi (AP 模式)
-    if (wifi_init_ap() != ESP_OK) {
-        ESP_LOGE(TAG, "Wi-Fi init failed");
-        return;
-    }
+    // 2. 外设驱动初始化 (LD14P / DRV8833 / DS18B20 / Flame)
+
     // LiDAR 传感器驱动
-    if (ld14p_init() != ESP_OK) {
-        ESP_LOGE(TAG, "LD14P init failed");
-        return;
-    }
+    if (ld14p_init() != ESP_OK) { ESP_LOGE(TAG, "LD14P init failed"); return; }
     // 电机 PWM 驱动
-    if (motor_init() != ESP_OK) {
-        ESP_LOGE(TAG, "Motor init failed");
-        return;
-    }
+    if (motor_init() != ESP_OK) { ESP_LOGE(TAG, "Motor init failed"); return; }
     // DS18B20 温度传感器
-    if (ds18b20_init() != ESP_OK) {
-        ESP_LOGW(TAG, "DS18B20 init failed, temperature task will retry");
-    }
-    // 火焰传感器 GPIO 初始化
-    if (flame_sensor_init() != ESP_OK) {
-        ESP_LOGW(TAG, "Flame sensor GPIO init failed");
-    }
+    if (ds18b20_init() != ESP_OK) { ESP_LOGW(TAG, "DS18B20 init failed"); return; }
+    // 火焰传感器 初始化
+    if (flame_sensor_init() != ESP_OK) { ESP_LOGW(TAG, "Flame sensor init failed"); return; }
 
-    // 3. 创建任务间通信对象
+    // 3. 任务间通信对象 — 队列 + 事件组
 
-    // q_polar: LD14P (36) + 火焰传感器 (5) 极坐标数据
     q_polar = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
-    if (q_polar == NULL) {
-        ESP_LOGE(TAG, "q_polar creation failed");
-        return;
-    }
-    // q_cart: 用于APF算法计算的笛卡尔坐标数据
-    q_cart = xQueueCreate(1, sizeof(vector_cart_t));
-    if (q_cart == NULL) {
-        ESP_LOGE(TAG, "q_cart creation failed");
-        return;
-    }
-    // q_temp: DS18B20 温度数据队列 (depth=4, 1s 缓冲)
-    q_temp = xQueueCreate(4, sizeof(float));
-    if (q_temp == NULL) {
-        ESP_LOGE(TAG, "q_temp creation failed");
-        return;
-    }
-    // q_log: 日志上传数据队列 (depth=41, 与 q_polar 一致)
-    q_log = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
-    if (q_log == NULL) {
-        ESP_LOGE(TAG, "q_log creation failed");
-        return;
-    }
-    // eg_sync: 用于确保传感器就绪的事件组
-    eg_sync = xEventGroupCreate();
-    if (eg_sync == NULL) {
-        ESP_LOGE(TAG, "eg_sync creation failed");
-        return;
-    }
+    if (!q_polar) { ESP_LOGE(TAG, "q_polar create fail"); return; }
 
-    // 4. 创建任务
+    q_cart = xQueueCreate(1, sizeof(vector_cart_t));
+    if (!q_cart)  { ESP_LOGE(TAG, "q_cart create fail");  return; }
+
+    q_temp = xQueueCreate(4, sizeof(float));
+    if (!q_temp)  { ESP_LOGE(TAG, "q_temp create fail");  return; }
+
+    q_log = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
+    if (!q_log)   { ESP_LOGE(TAG, "q_log create fail");   return; }
+
+    eg_sync = xEventGroupCreate();
+    if (!eg_sync) { ESP_LOGE(TAG, "eg_sync create fail");  return; }
+
+    // 4. 创建 FreeRTOS 任务 (优先级数字越大越高)
 
 #ifndef DEBUG
-    motor_set(0, 0);    // 确保电机不动
+    motor_set(0, 0);
     // 心跳 LED，优先级最低
-    xTaskCreate(vLedTask, "LedTask", 2048, NULL, 1, NULL);
+    xTaskCreate(vLedTask,    "LedTask",    2048, NULL, 1, NULL);
     // LIDAR 传感器任务，较复杂，依赖UART缓冲区
-    xTaskCreate(ld14p_task, "ld14p_sensor", 8192, NULL, 5, NULL);
-    // 火焰传感器任务，简单，快速完成
-    xTaskCreate(flame_task, "flame_sensor", 2048, NULL, 7, NULL);
+    xTaskCreate(ld14p_task,  "ld14p",      8192, NULL, 5, NULL);
+    // 火焰传感器任务，简单
+    xTaskCreate(flame_task,  "flame",      2048, NULL, 7, NULL);
     // 温度传感器任务，有时序要求
-    xTaskCreate(temp_task, "temp_sensor", 4096, NULL, 6, NULL);
+    xTaskCreate(temp_task,   "temp",       4096, NULL, 6, NULL);
     // 日志上传任务 (WebSocket 服务端)，低优先级，与数据流解耦
-    // xTaskCreate(mqtt_task, "mqtt_log", 8192, NULL, 3, NULL);
-    xTaskCreate(websocket_task, "websocket_log", 8192, NULL, 3, NULL);
-    vTaskDelay(pdMS_TO_TICKS(1000)); 
-    /* APF 避障任务，较复杂，依赖雷达、温度传感器数据，读取队列后即释放事件组 */
-    xTaskCreate(apf_task, "apf_task", 4096, NULL, 4, NULL);
-    /* 电机控制任务，较复杂，强时序要求 */
-    xTaskCreate(motor_task, "motor_task", 4096, NULL, 8, NULL);
+    xTaskCreate(web_task,    "web_task",   8192, NULL, 3, NULL);
+    vTaskDelay(pdMS_TO_TICKS(1000));    // 1s 缓冲
+    xTaskCreate(apf_task,    "apf",        4096, NULL, 4, NULL);
+    xTaskCreate(motor_task,  "motor",      4096, NULL, 8, NULL);
+#else
+    xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL);
 #endif
-#ifdef DEBUG
-    /* 测试地底盘功能 */
-    if (xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "TestVector task creation failed");
-        return;
-    }
-#endif
-    ESP_LOGI(TAG, "\n----------Leaving app_main, scheduler to be started----------\n\n");
+
+    ESP_LOGI(TAG, "\napp_main done, scheduler starting...\n");
 }
