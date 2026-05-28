@@ -22,7 +22,6 @@ static const char *TAG = "APF_TASK  ";
 #define M_PI 3.14159265358979323846f
 #endif
 
-
 /**
  * @brief 极坐标 → 笛卡尔坐标
  */

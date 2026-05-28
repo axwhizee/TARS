@@ -37,13 +37,13 @@ static const char *TAG = "MAIN";
 
 // 全局 RTOS 通信对象 (定义在此, extern 供所有任务引用)
 
-QueueHandle_t        q_polar;   /* LD14P + 火焰传感器极坐标数据 */
-QueueHandle_t        q_cart;    /* APF 笛卡尔合力结果 (xQueueOverwrite, depth=1) */
-QueueHandle_t        q_temp;    /* DS18B20 温度数据 (depth=4) */
-QueueHandle_t        q_log;     /* 日志透传队列 (vector_polar_t, 供 web_task 读取) */
-EventGroupHandle_t   eg_sync;   /* 传感器就绪 + 日志就绪事件组 */
+QueueHandle_t        q_polar;   // LD14P + 火焰传感器极坐标数据
+QueueHandle_t        q_cart;    // APF 笛卡尔合力结果 (xQueueOverwrite, depth=1)
+QueueHandle_t        q_temp;    // DS18B20 温度数据 (depth=4)
+QueueHandle_t        q_log;     // 日志透传队列 (vector_polar_t, 供 web_task 读取)
+EventGroupHandle_t   eg_sync;   // 传感器就绪 + 日志就绪事件组
 
-// 心跳 LED (prio 1, 1Hz)
+/// @brief 心跳 LED (prio 1, 1Hz)
 static void vLedTask(void *pvParameters) {
     (void)pvParameters;
     gpio_config_t io_conf = {
@@ -95,8 +95,8 @@ void app_main(void) {
     if (ld14p_init() != ESP_OK) { ESP_LOGE(TAG, "LD14P init failed"); return; }
     // 电机 PWM 驱动
     if (motor_init() != ESP_OK) { ESP_LOGE(TAG, "Motor init failed"); return; }
-    // DS18B20 温度传感器
-    if (ds18b20_init() != ESP_OK) { ESP_LOGW(TAG, "DS18B20 init failed"); return; }
+    // DS18B20 温度传感器，暂时允许初始化失败
+    if (ds18b20_init() != ESP_OK) { ESP_LOGW(TAG, "DS18B20 init failed"); }
     // 火焰传感器 初始化
     if (flame_sensor_init() != ESP_OK) { ESP_LOGW(TAG, "Flame sensor init failed"); return; }
 
@@ -104,16 +104,12 @@ void app_main(void) {
 
     q_polar = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
     if (!q_polar) { ESP_LOGE(TAG, "q_polar create fail"); return; }
-
     q_cart = xQueueCreate(1, sizeof(vector_cart_t));
     if (!q_cart)  { ESP_LOGE(TAG, "q_cart create fail");  return; }
-
     q_temp = xQueueCreate(4, sizeof(float));
     if (!q_temp)  { ESP_LOGE(TAG, "q_temp create fail");  return; }
-
     q_log = xQueueCreate(Q_POLAR_DEPTH, sizeof(vector_polar_t));
     if (!q_log)   { ESP_LOGE(TAG, "q_log create fail");   return; }
-
     eg_sync = xEventGroupCreate();
     if (!eg_sync) { ESP_LOGE(TAG, "eg_sync create fail");  return; }
 
@@ -138,5 +134,5 @@ void app_main(void) {
     xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL);
 #endif
 
-    ESP_LOGI(TAG, "\napp_main done, scheduler starting...\n");
+    ESP_LOGI(TAG, "App_main done, scheduler starting...\n");
 }

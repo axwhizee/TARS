@@ -59,8 +59,13 @@ static void ws_send_all(const char *data, size_t len) {
         .len     = len,
     };
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
-    for (int i = 0; i < ws_count; i++)
-        httpd_ws_send_frame_async(ws_server, ws_fds[i], &pkt);
+    for (int i = ws_count - 1; i >= 0; i--) {
+        esp_err_t err = httpd_ws_send_frame_async(ws_server, ws_fds[i], &pkt);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "WS send failed fd=%d err=%d, removing", ws_fds[i], err);
+            ws_fds[i] = ws_fds[--ws_count];
+        }
+    }
     xSemaphoreGive(ws_mutex);
 }
 
@@ -139,8 +144,8 @@ void web_task(void *pvParameters) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = WEBSOCKET_PORT;
     cfg.lru_purge_enable  = true;
-    cfg.recv_wait_timeout = 10;
-    cfg.send_wait_timeout = 10;
+    cfg.recv_wait_timeout = 2;
+    cfg.send_wait_timeout = 2;
 
     if (httpd_start(&ws_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server start failed");
@@ -211,7 +216,7 @@ void web_task(void *pvParameters) {
         char *json_str = cJSON_PrintUnformatted(root);
         if (json_str) {
             ws_send_all(json_str, strlen(json_str));
-            ESP_LOGI(TAG, "Sent %d bytes to %d client(s)", (int)strlen(json_str), ws_count);
+            ESP_LOGI(TAG, "Sent %d bytes to %d client(s)\n", (int)strlen(json_str), ws_count);
             free(json_str);
         }
         cJSON_Delete(root);

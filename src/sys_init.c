@@ -2,7 +2,6 @@
  * @file sys_init.c
  * @brief ESP32 系统级初始化实现 — NVS Flash / SPIFFS 挂载 / Wi-Fi AP 启动
  *
- * 这三个子系统的初始化是 ESP-IDF 平台的基础, 必须在任何硬件驱动之前完成:
  *   1. NVS    — Wi-Fi 与 SPIFFS 需要 NVS 存储分区
  *   2. SPIFFS — 网页文件 (data/) 存于 SPIFFS 分区, 挂载到 /spiffs
  *   3. Wi-Fi  — AP 模式 (无加密), 静态 IP 192.168.1.1/24, 所有后续网络服务

@@ -109,7 +109,7 @@ graph TD
 
 ESP32 内置 Web 服务器，连接其 Wi-Fi (`APF-NVC`) 后浏览器访问 `http://192.168.1.1` 即可看到实时雷达图:
 
-- **Canvas 极坐标渲染** — 零外部依赖 (替代原 PC 端 Python 脚本)
+- **Canvas 极坐标渲染** — 零外部依赖，纯前端实现
 - 同心圆距离网格 (1m~6m, 危险区/安全区分色)
 - 旋转扫描线动画
 - 散点着色: 红色 <1m (危险), 绿色 1~6m (安全), 青色 >6m
@@ -158,6 +158,9 @@ pio run -t monitor
 
 # 清理
 pio run -t clean
+
+# 查看已解析的构建变量
+pio run -t envdump
 ```
 
 构建、烧录固件+网页、烧录一条龙（Build + Build File system Image + Upload Filesystem Image + Upload and Monitor）:
@@ -165,6 +168,30 @@ pio run -t clean
 ```
 pio run -t upload -t uploadfs -t monitor
 ```
+
+> 烧录波特率 921600，监视器波特率 115200（见 `platformio.ini`）。
+
+### DEBUG 模式
+
+在 `apf_common.h` 中取消注释 `#define DEBUG`（或通过 `build_flags = -D DEBUG`），系统将跳过所有传感器与控制任务，仅执行电机 ramp 测试序列。生产运行时务必禁用。
+
+## SDK 关键配置 (`sdkconfig.defaults`)
+
+| 配置项 | 值 | 说明 |
+|---|---|---|
+| `CONFIG_SPIRAM_MODE_OCT` | y | 启用 Octal PSRAM（N16R8 必须） |
+| `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY` | n | 任务栈保留在内部 RAM，避免 PSRAM 缓存错误 |
+| `CONFIG_FREERTOS_USE_TICKLESS_IDLE` | n | 禁止 Tickless Idle（否则 `vTaskDelay` 永不返回） |
+| `CONFIG_HTTPD_WS_SUPPORT` | y | 启用 HTTPD WebSocket 支持 |
+| `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` | n | 禁用证书包（避免 x509_crt_bundle 编译错误） |
+
+## 分区表 (`default_16MB.csv`)
+
+| 分区名 | 大小 | 说明 |
+|---|---|---|
+| factory | 2MB | 出厂固件 |
+| ota_0 / ota_1 | 各 2MB | OTA 双分区 |
+| spiffs | 1MB | Web 页面存储 |
 
 ## 关键设计决策
 

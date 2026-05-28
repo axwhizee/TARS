@@ -82,15 +82,15 @@ MCU的3、46引脚已经被剪断，避免干扰电路
  */
 /**
 原始设置，因为PCB设计失误，暂放弃，修复方案：
-#define LED_PIN             48  // 开发板LED
-#define MOTOR_AIN1_PIN      11  // AIN1
-#define MOTOR_AIN2_PIN      12  // AIN2
-#define MOTOR_BIN1_PIN      13  // BIN1
-#define MOTOR_BIN2_PIN      14  // BIN2
-#define LD14P_UTX_PIN       17  // UTX，接LD14P-RX
-#define LD14P_URX_PIN       18  // URX，接LD14P-TX
-#define FLAME_GPIO_MASK     ((1ULL << 4) | (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8))
-#define DS18B20_PIN         9   // TEMP-DQ
+LED_PIN             48  // 开发板LED
+MOTOR_AIN1_PIN      11  // AIN1
+MOTOR_AIN2_PIN      12  // AIN2
+MOTOR_BIN1_PIN      13  // BIN1
+MOTOR_BIN2_PIN      14  // BIN2
+LD14P_UTX_PIN       17  // UTX，接LD14P-RX
+LD14P_URX_PIN       18  // URX，接LD14P-TX
+FLAME_GPIO_MASK     ((1ULL << 4) | (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8))
+DS18B20_PIN         9   // TEMP-DQ
  */
 
 // LD14P 配置
@@ -118,7 +118,7 @@ MCU的3、46引脚已经被剪断，避免干扰电路
 
 #define APF_SAFE_RANGE      6000.0f  // 安全感知范围，超出视为噪声
 #define APF_DANGER_RANGE    1000.0f  // 危险区阈值
-#define APF_PERCEPTION_MIN  100.0f   // 最小感知距离（避免自身/地面对 1/r² 的无穷大）
+#define APF_PERCEPTION_MIN  100.0f   // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
 #define APF_ATTRACT_GAIN    1500.0f  // 引力增益 (K_att)，目前仅用于产生前向行进引力
 #define APF_REPULSE_GAIN    8000.0f  // 斥力增益 (K_rep)
 #define APF_DANGER_RE_WT    2.5f  // 危险区斥力权重倍率 (0-2m)
