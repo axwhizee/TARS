@@ -16,9 +16,11 @@ const CONFIG = {
     }
 };
 
+const D2R = Math.PI / 180;
+
 let radarData = [];
+let cartCmd = null;
 let ws = null, isConnected = false;
-let scanAngle = 0;
 let canvas, ctx, w, h, cx, cy, r;
 
 function hexToRgba(hex, a) {
@@ -33,7 +35,7 @@ function getColor(d) {
 }
 
 function toCanvas(deg, dist) {
-    const rad = deg * Math.PI / 180;
+    const rad = deg * D2R;
     const s = dist / CONFIG.MAX_DISTANCE_MM * r;
     return { x: cx + s * Math.sin(rad), y: cy - s * Math.cos(rad) };
 }
@@ -95,33 +97,30 @@ function drawGrid() {
         ctx.fillText((d / 1000) + 'm', cx + rr + 3, cy + 3);
     });
 
-    ctx.lineWidth = 0.3;
     ctx.strokeStyle = CONFIG.C.grid;
+    ctx.lineWidth = 0.3;
     ctx.font = '10px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let a = 0; a < 360; a += 30) {
-        const rad = a * Math.PI / 180;
+        const rad = a * D2R;
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.lineTo(cx + r * Math.sin(rad), cy - r * Math.cos(rad));
         ctx.stroke();
         ctx.fillText(a + '°', cx + (r + 16) * Math.sin(rad), cy - (r + 16) * Math.cos(rad));
     }
-
-    const top = cy - r;
-    ctx.beginPath();
-    ctx.moveTo(cx, top);
-    ctx.lineTo(cx - 5, top + 10);
-    ctx.lineTo(cx + 5, top + 10);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(0,200,255,0.5)';
-    ctx.fill();
 }
 
-function drawScan() {
-    const rad = scanAngle * Math.PI / 180;
-    const ex = cx + r * Math.sin(rad), ey = cy - r * Math.cos(rad);
+function drawDirection() {
+    if (!cartCmd) return;
+    let dx = cartCmd.dx || 0, dy = cartCmd.dy || 0;
+    const total = Math.hypot(dx, dy);
+    if (total < 1) return;
+    const scale = Math.min(total, 6000) / 6000 * r;
+    const nx = dy / total * scale;
+    const ny = -dx / total * scale;
+    const ex = cx + nx, ey = cy + ny;
     const g = ctx.createLinearGradient(cx, cy, ex, ey);
     g.addColorStop(0, 'transparent');
     g.addColorStop(0.7, 'rgba(0,200,255,0.06)');
@@ -130,7 +129,7 @@ function drawScan() {
     ctx.moveTo(cx, cy);
     ctx.lineTo(ex, ey);
     ctx.strokeStyle = g;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2;
     ctx.stroke();
 }
 
@@ -162,12 +161,11 @@ function drawPoints() {
 function loop() {
     try {
         ctx.clearRect(0, 0, w, h);
-        scanAngle = (scanAngle + 1.5) % 360;
         drawZoneFill(CONFIG.DANGER_DISTANCE_MM, CONFIG.C.dangerFill);
         drawZoneRing(CONFIG.DANGER_DISTANCE_MM, CONFIG.SAFE_DISTANCE_MM, CONFIG.C.safeFill);
         drawGrid();
-        drawScan();
         drawPoints();
+        drawDirection();
     } catch (e) {
         console.error('Render error:', e);
     }
@@ -203,15 +201,6 @@ function updateFps() {
     while (fpsTimestamps.length > 0 && now - fpsTimestamps[0] > 1000)
         fpsTimestamps.shift();
     els.fpsText.textContent = fpsTimestamps.length + ' frame/s';
-}
-
-function resetFps() {
-    fpsTimestamps = [];
-    lastDataTime = 0;
-    if (!staleNotified) {
-        els.fpsText.textContent = '0 frame/s';
-        els.fpsText.style.color = '';
-    }
 }
 
 function checkStale() {
@@ -250,14 +239,15 @@ function connect() {
         ws.onclose = () => {
             isConnected = false;
             ws = null;
-            resetFps();
+            lastDataTime = 0;
+            fpsTimestamps.length = 0;
             setState('connecting');
             reconnectTimer = setTimeout(() => {
                 reconnectDelay = Math.min(reconnectDelay * 2, 5000);
                 connect();
             }, reconnectDelay);
         };
-    } catch (_) { resetFps(); setState('connecting'); }
+    } catch (_) { lastDataTime = 0; setState('connecting'); }
 }
 
 function setState(s) {
@@ -269,13 +259,22 @@ function setState(s) {
 function handle(data) {
     if (data.temp != null && !isNaN(data.temp))
         els.temp.textContent = data.temp.toFixed(1) + ' °C';
-    const vectors = (data.vectors || []).filter(
-        v => v.d > 0 && !isNaN(v.d) && v.d <= CONFIG.MAX_DISTANCE_MM
-    );
-    radarData = vectors;
-    els.statDanger.textContent = vectors.filter(v => v.d <= CONFIG.DANGER_DISTANCE_MM).length;
-    els.statSafe.textContent   = vectors.filter(v => v.d > CONFIG.DANGER_DISTANCE_MM && v.d <= CONFIG.SAFE_DISTANCE_MM).length;
-    els.statTotal.textContent  = vectors.length;
+    if (data.cart)
+        cartCmd = data.cart;
+    const raw = data.vectors || [];
+    const filtered = [];
+    let danger = 0, safe = 0;
+    for (let i = 0; i < raw.length; i++) {
+        const d = raw[i].d;
+        if (d <= 0 || isNaN(d) || d > CONFIG.MAX_DISTANCE_MM) continue;
+        filtered.push(raw[i]);
+        if (d <= CONFIG.DANGER_DISTANCE_MM) danger++;
+        else if (d <= CONFIG.SAFE_DISTANCE_MM) safe++;
+    }
+    radarData = filtered;
+    els.statDanger.textContent = danger;
+    els.statSafe.textContent = safe;
+    els.statTotal.textContent = filtered.length;
     updateFps();
 }
 

@@ -21,7 +21,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
-#include "cJSON.h"
+// #include "cJSON.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
@@ -51,21 +51,32 @@ static void ws_remove_client(int fd) {
     xSemaphoreGive(ws_mutex);
 }
 
-// WebSocket 广播 (httpd 异步帧发送, 避免裸 socket 冲突)
+// WebSocket 广播 — 拷贝 fd 后发送, 不持锁避免阻塞 ws_handler
 static void ws_send_all(const char *data, size_t len) {
     httpd_ws_frame_t pkt = {
         .type    = HTTPD_WS_TYPE_TEXT,
         .payload = (uint8_t *)data,
         .len     = len,
     };
+    int count;
+    int fds[WS_MAX_CLIENTS];
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
-    for (int i = ws_count - 1; i >= 0; i--) {
-        esp_err_t err = httpd_ws_send_frame_async(ws_server, ws_fds[i], &pkt);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "WS send failed fd=%d err=%d, removing", ws_fds[i], err);
-            ws_fds[i] = ws_fds[--ws_count];
-        }
+    count = ws_count;
+    memcpy(fds, ws_fds, count * sizeof(int));
+    xSemaphoreGive(ws_mutex);
+
+    int live = 0;
+    for (int i = 0; i < count; i++) {
+        esp_err_t err = httpd_ws_send_frame_async(ws_server, fds[i], &pkt);
+        if (err == ESP_OK)
+            fds[live++] = fds[i];
+        else
+            ESP_LOGW(TAG, "WS send failed fd=%d err=%d, removing", fds[i], err);
     }
+
+    xSemaphoreTake(ws_mutex, portMAX_DELAY);
+    ws_count = live;
+    memcpy(ws_fds, fds, live * sizeof(int));
     xSemaphoreGive(ws_mutex);
 }
 
@@ -120,12 +131,18 @@ static esp_err_t ws_handler(httpd_req_t *req) {
 
     uint8_t buf[256];
     httpd_ws_frame_t pkt = { .payload = buf };
+    int errs = 0;
 
     while (1) {
         esp_err_t ret = httpd_ws_recv_frame(req, &pkt, sizeof(buf));
-        if (ret != ESP_OK) break;
+        if (ret != ESP_OK) {
+            if (++errs > 10) break;              // 连续10次失败则真断开
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        errs = 0;
         if (pkt.type == HTTPD_WS_TYPE_CLOSE) break;
-        if (pkt.type == HTTPD_WS_TYPE_PING) {       // 浏览器 PING → 回复 PONG
+        if (pkt.type == HTTPD_WS_TYPE_PING) {
             pkt.type = HTTPD_WS_TYPE_PONG;
             httpd_ws_send_frame(req, &pkt);
         }
@@ -183,42 +200,53 @@ void web_task(void *pvParameters) {
         else    ESP_LOGW(TAG, "SPIFFS: %s MISSING — run uploadfs", check_files[i]);
     }
 
-    // 4. 数据推送主循环 — 每轮等待 APF 产出新一帧日志 */
+    // 4. 数据推送主循环 — 每轮等待 APF 产出新一帧日志
+    char json_buf[3600];
     while (1) {
-        xEventGroupWaitBits(eg_sync, BIT_LOG_Q_READY,
-                            pdFALSE, pdFALSE, portMAX_DELAY);
+        xEventGroupWaitBits(eg_sync, BIT_LOG_Q_READY, pdFALSE, pdFALSE, portMAX_DELAY);
 
-        // 读取极坐标向量 (LiDAR + 火焰)
+        // 无客户端连接时仅消费队列, 跳过 JSON 构建
+        int count;
+        xSemaphoreTake(ws_mutex, portMAX_DELAY);
+        count = ws_count;
+        xSemaphoreGive(ws_mutex);
+        if (count == 0) {
+            vector_polar_t dummy;
+            while (xQueueReceive(q_log, &dummy, 0) == pdTRUE) {}
+            xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY | BIT_TEMP_Q_READY);
+            ESP_LOGI(TAG, "No client connected\n");
+            continue;
+        }
+
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++)
             xQueueReceive(q_log, &vectors[i], 0);
-
-        // 温度可选 (非阻塞, 无新数据则为 NaN)
         float temp = NAN;
+        vector_cart_t cart = g_cart_cmd;
         xQueueReceive(q_temp, &temp, 0);
 
         xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY | BIT_TEMP_Q_READY);
         int64_t ts_us = esp_timer_get_time();
 
-        // 构建 JSON: { "ts":..., "temp":..., "vectors":[{a,d},...] }
-        cJSON *root = cJSON_CreateObject();
-        cJSON_AddNumberToObject(root, "ts", (double)ts_us);
-        cJSON_AddNumberToObject(root, "temp", (double)temp);
+        // 手动构建 JSON (单缓冲区, 避免 cJSON 多次 malloc 导致堆碎片)
+        int pos = snprintf(json_buf, sizeof(json_buf), "{\"ts\":%lld,\"temp\":", ts_us);
+        if (isnan(temp))
+            pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "null");
+        else
+            pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "%.2f", temp);
+        pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
+            ",\"cart\":{\"dx\":%.2f,\"dy\":%.2f},\"vectors\":[", cart.dx, cart.dy);
 
-        cJSON *arr = cJSON_AddArrayToObject(root, "vectors");
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-            cJSON *v = cJSON_CreateObject();
-            cJSON_AddNumberToObject(v, "a", (double)vectors[i].angle_deg);
-            cJSON_AddNumberToObject(v, "d", (double)vectors[i].distance_mm);
-            cJSON_AddItemToArray(arr, v);
+            if (pos >= (int)sizeof(json_buf) - 40) break;
+            pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
+                "{\"a\":%.2f,\"d\":%.2f}%s",
+                vectors[i].angle_deg, vectors[i].distance_mm,
+                (i < Q_POLAR_DEPTH - 1) ? "," : "");
         }
 
-        char *json_str = cJSON_PrintUnformatted(root);
-        if (json_str) {
-            ws_send_all(json_str, strlen(json_str));
-            ESP_LOGI(TAG, "Sent %d bytes to %d client(s)\n", (int)strlen(json_str), ws_count);
-            free(json_str);
-        }
-        cJSON_Delete(root);
+        pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "]}");
+        ws_send_all(json_buf, pos);
+        ESP_LOGI(TAG, "Sent %d bytes to %d client(s)\n", pos, ws_count);
     }
 }

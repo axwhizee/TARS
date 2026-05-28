@@ -38,6 +38,7 @@ extern QueueHandle_t        q_cart;     // APF 计算结果队列，深度 1
 extern QueueHandle_t        q_temp;     // DS18B20 温度数据队列
 extern QueueHandle_t        q_log;      // 日志上传数据队列 (透传 vector_polar_t)
 extern EventGroupHandle_t   eg_sync;    // 传感器同步事件组
+extern vector_cart_t        g_cart_cmd; // 最新 APF 合力指令 (web_task 绕过争用直接读)
 
 // 任务间同步事件组
 

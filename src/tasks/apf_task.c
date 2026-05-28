@@ -17,6 +17,7 @@
 #include <math.h>
 
 static const char *TAG = "APF_TASK  ";
+vector_cart_t g_cart_cmd;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -62,6 +63,7 @@ void apf_task(void *pvParameters) {
             ESP_LOGW(TAG, "Sensor sync timeout");   // 传感器数据等待超时
             result.dx = result.dy = 0.0f;
             xQueueOverwrite(q_cart, &result);   // 空指令滑行
+            g_cart_cmd = result;
             continue;
         }
         if (xEventGroupGetBits(eg_sync) & BIT_LOG_Q_READY) {
@@ -110,6 +112,7 @@ void apf_task(void *pvParameters) {
         result.dy = rep_fy;
 
         xQueueOverwrite(q_cart, &result);
+        g_cart_cmd = result;    // 复制一份供日志更新
         // 添加换行，表示一次完整任务流程结束
         ESP_LOGI(TAG, "F_cmd = (%.0f,%.0f) | danger=%d safe=%d noise=%d",
             result.dx, result.dy, danger_cnt, safe_cnt, noise_cnt);
