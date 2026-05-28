@@ -25,8 +25,7 @@ void temp_task(void *pvParameters) {
         vTaskDelayUntil(&last_wake, period);    // 任务周期性运行
 
         if (ds18b20_start_conversion() != ESP_OK) {
-            ESP_LOGW(TAG, "Conversion start failed, retrying in %dms",
-                (uint16_t)(1000 / SENSOR_FREQ));
+            ESP_LOGW(TAG, "Conversion start failed");
             continue;
         }
 

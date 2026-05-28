@@ -125,11 +125,11 @@ void app_main(void) {
     xTaskCreate(flame_task,  "flame",      2048, NULL, 7, NULL);
     // 温度传感器任务，有时序要求
     xTaskCreate(temp_task,   "temp",       4096, NULL, 6, NULL);
+    xTaskCreate(apf_task,    "apf",        4096, NULL, 4, NULL);
+    xTaskCreate(motor_task,  "motor",      4096, NULL, 8, NULL);
     // 日志上传任务 (WebSocket 服务端)，低优先级，与数据流解耦
     xTaskCreate(web_task,    "web_task",   8192, NULL, 3, NULL);
     vTaskDelay(pdMS_TO_TICKS(1000));    // 1s 缓冲
-    xTaskCreate(apf_task,    "apf",        4096, NULL, 4, NULL);
-    xTaskCreate(motor_task,  "motor",      4096, NULL, 8, NULL);
 #else
     xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL);
 #endif

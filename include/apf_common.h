@@ -117,13 +117,13 @@ DS18B20_PIN         9   // TEMP-DQ
 
 #define Q_POLAR_DEPTH   (LIDAR_SECTORS + FLAME_SENSOR_COUNT)    // 传感器数据统一队列
 
-#define APF_SAFE_RANGE      6000.0f  // 安全感知范围，超出视为噪声
-#define APF_DANGER_RANGE    1000.0f  // 危险区阈值
-#define APF_PERCEPTION_MIN  100.0f   // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
-#define APF_ATTRACT_GAIN    1500.0f  // 引力增益 (K_att)，目前仅用于产生前向行进引力
-#define APF_REPULSE_GAIN    8000.0f  // 斥力增益 (K_rep)
-#define APF_DANGER_RE_WT    2.5f  // 危险区斥力权重倍率 (0-2m)
-#define APF_SAFE_REP_WT     1.0f  // 感知区斥力权重倍率 (2-6m)
+#define APF_SAFE_RANGE      4000.0f     // 安全感知范围，超出视为噪声。由于实际雷达数据偏小，应小于6000
+#define APF_DANGER_RANGE    800.0f      // 危险区阈值
+#define APF_PERCEPTION_MIN  100.0f      // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
+#define APF_ATTRACT_GAIN    1500.0f     // 引力增益 (K_att)，目前仅用于产生前向行进引力
+#define APF_REPULSE_GAIN    200.0f      // 斥力增益 (K_rep)，目前影响制动距离
+// #define APF_REPULSE_GAIN    APF_ATTRACT_GAIN * APF_DANGER_RANGE / 14  // 斥力增益 (K_rep)
+#define APF_DANGER_RE_WT    2.0f        // 危险区斥力权重倍率 (0-2m)
 
 // 电机驱动配置
 
@@ -133,15 +133,12 @@ DS18B20_PIN         9   // TEMP-DQ
 #define MOTOR_MIN_DUTY      75          // 能克服电机静摩擦力的最低有效占空比，需根据实测情况设置
 #define MOTOR_MIN_COUNT     (MOTOR_MAX_COUNT * MOTOR_MIN_DUTY / 100U)    // 占空比对应的计数器值
 
-#define MOTOR_PWM_FREQ      20000       // PWM频率 20kHz
-#define MOTOR_PWM_BITS      10          // PWM分辨率 10-bit (0-1023)
-#define MOTOR_PWM_MAX       ((1U << MOTOR_PWM_BITS) - 1)    // 最大计数周期
 #define MOTOR_FREQ_HZ       SENSOR_FREQ * 2 // 电机控制任务频率，为传感器工作频率的两倍
 #define MOTOR_TIMEOUT_MS    1000        // 指令超时阈值，超时停车
 #define MOTOR_DEADZONE_MM   50.0f       // 笛卡控制尔死区
 #define MOTOR_TURN_RATIO    0.7f        // 差速转向中角分量的灵敏度权重
 #define MOTOR_DEADTIME_MS   20          // 换向死区制动保持时长，抑制电流冲击
-#define MOTOR_MAX_MM        6000.0f     // 输出幅值上限，用于向量归一化
+#define MOTOR_MAX_MM        3000.0f     // 输出幅值上限，用于向量归一化
 #define MOTOR_EMA_TAU_MS    150         // EMA时间常数 τ (ms)，控制平滑收敛速度
 // α = 1 - exp(-dt/τ) = 1 - exp(-125/150) ≈ 0.34
 #define MOTOR_EMA_ALPHA     (1.0f - expf(-(float)(1000 / MOTOR_FREQ_HZ) / MOTOR_EMA_TAU_MS))

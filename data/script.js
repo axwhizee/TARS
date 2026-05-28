@@ -1,10 +1,10 @@
 const CONFIG = {
-    MAX_DISTANCE_MM: 7000,
-    DANGER_DISTANCE_MM: 1000,
-    SAFE_DISTANCE_MM: 6000,
-    GRID_STEPS: [1000, 2000, 3000, 4000, 5000, 6000],
+    MAX_DISTANCE_MM: 5000,
+    DANGER_DISTANCE_MM: 800,
+    SAFE_DISTANCE_MM: 4000,
+    GRID_STEPS: [1000, 2000, 3000, 4000],
     C: {
-        grid: '#1a1a2e',
+        grid: '#3c3c5c58',
         text: '#888',
         dangerFill: 'rgba(255,68,68,0.06)',
         safeFill: 'rgba(68,255,68,0.03)',
@@ -61,44 +61,45 @@ function resize() {
     r = Math.min(cx, cy) * 0.82;
 }
 
-function drawZoneFill(maxMM, color) {
-    const rr = maxMM / CONFIG.MAX_DISTANCE_MM * r;
+function toR(mm) { return mm / CONFIG.MAX_DISTANCE_MM * r; }
+
+function fillRing(innerMM, outerMM, style) {
     ctx.beginPath();
-    ctx.arc(cx, cy, rr, 0, 2 * Math.PI);
-    ctx.fillStyle = color;
+    ctx.arc(cx, cy, toR(outerMM), 0, 2 * Math.PI);
+    if (innerMM > 0) ctx.arc(cx, cy, toR(innerMM), 0, 2 * Math.PI, true);
+    ctx.fillStyle = style;
     ctx.fill();
 }
 
-function drawZoneRing(innerMM, outerMM, color) {
-    const ri = innerMM / CONFIG.MAX_DISTANCE_MM * r;
-    const ro = outerMM / CONFIG.MAX_DISTANCE_MM * r;
+function strokeRing(mm, style, w, dash) {
     ctx.beginPath();
-    ctx.arc(cx, cy, ro, 0, 2 * Math.PI);
-    ctx.arc(cx, cy, ri, 0, 2 * Math.PI, true);
-    ctx.fillStyle = color;
-    ctx.fill();
+    ctx.arc(cx, cy, toR(mm), 0, 2 * Math.PI);
+    ctx.strokeStyle = style;
+    ctx.lineWidth = w;
+    if (dash) ctx.setLineDash(dash);
+    ctx.stroke();
+    ctx.setLineDash([]);
 }
 
-function drawGrid() {
+function drawBackdrop() {
+    fillRing(0, CONFIG.DANGER_DISTANCE_MM, CONFIG.C.dangerFill);
+    fillRing(CONFIG.DANGER_DISTANCE_MM, CONFIG.SAFE_DISTANCE_MM, CONFIG.C.safeFill);
+
+    strokeRing(CONFIG.DANGER_DISTANCE_MM, CONFIG.C.dangerLine, 1, [4, 4]);
+    strokeRing(CONFIG.SAFE_DISTANCE_MM,   CONFIG.C.safeLine,   1, [4, 4]);
+    strokeRing(CONFIG.MAX_DISTANCE_MM,    CONFIG.C.grid,       1, null);
+
     ctx.fillStyle = CONFIG.C.text;
     ctx.font = '9px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     CONFIG.GRID_STEPS.forEach(d => {
-        const rr = d / CONFIG.MAX_DISTANCE_MM * r;
-        ctx.beginPath();
-        ctx.arc(cx, cy, rr, 0, 2 * Math.PI);
-        ctx.strokeStyle = d <= CONFIG.DANGER_DISTANCE_MM ? CONFIG.C.dangerLine
-            : d <= CONFIG.SAFE_DISTANCE_MM ? CONFIG.C.safeLine : CONFIG.C.grid;
-        ctx.lineWidth = (d === CONFIG.DANGER_DISTANCE_MM || d === CONFIG.SAFE_DISTANCE_MM) ? 1 : 0.5;
-        if (ctx.lineWidth === 1) ctx.setLineDash([5, 5]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillText((d / 1000) + 'm', cx + rr + 3, cy + 3);
+        strokeRing(d, CONFIG.C.grid, 0.7);
+        ctx.fillText((d / 1000) + 'm', cx + toR(d) + 3, cy + 3);
     });
 
     ctx.strokeStyle = CONFIG.C.grid;
-    ctx.lineWidth = 0.3;
+    ctx.lineWidth = 0.5;
     ctx.font = '10px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -117,14 +118,14 @@ function drawDirection() {
     let dx = cartCmd.dx || 0, dy = cartCmd.dy || 0;
     const total = Math.hypot(dx, dy);
     if (total < 1) return;
-    const scale = Math.min(total, 6000) / 6000 * r;
+    const scale = Math.min(total, CONFIG.MAX_DISTANCE_MM) / CONFIG.MAX_DISTANCE_MM * r;
     const nx = dy / total * scale;
     const ny = -dx / total * scale;
     const ex = cx + nx, ey = cy + ny;
     const g = ctx.createLinearGradient(cx, cy, ex, ey);
     g.addColorStop(0, 'transparent');
-    g.addColorStop(0.7, 'rgba(0,200,255,0.06)');
-    g.addColorStop(1, 'rgba(0,200,255,0.18)');
+    g.addColorStop(0.7, 'rgba(0, 200, 255, 0.25)');
+    g.addColorStop(1, 'rgba(0, 200, 255, 0.74)');
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(ex, ey);
@@ -134,19 +135,15 @@ function drawDirection() {
 }
 
 function drawPoints() {
-    const points = radarData.map(p => ({
-        pt: toCanvas(p.a, p.d),
-        color: getColor(p.d)
-    }));
-    points.forEach(({pt, color}) => {
+    radarData.forEach(p => {
+        const pt = toCanvas(p.a, p.d);
+        const color = getColor(p.d);
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.lineTo(pt.x, pt.y);
         ctx.strokeStyle = hexToRgba(color, 0.10);
         ctx.lineWidth = 0.5;
         ctx.stroke();
-    });
-    points.forEach(({pt, color}) => {
         ctx.save();
         ctx.shadowBlur = 2;
         ctx.shadowColor = hexToRgba(color, 0.5);
@@ -161,9 +158,7 @@ function drawPoints() {
 function loop() {
     try {
         ctx.clearRect(0, 0, w, h);
-        drawZoneFill(CONFIG.DANGER_DISTANCE_MM, CONFIG.C.dangerFill);
-        drawZoneRing(CONFIG.DANGER_DISTANCE_MM, CONFIG.SAFE_DISTANCE_MM, CONFIG.C.safeFill);
-        drawGrid();
+        drawBackdrop();
         drawPoints();
         drawDirection();
     } catch (e) {
@@ -179,6 +174,7 @@ const els = {
     statusText: document.getElementById('statusText'),
     fpsText: document.getElementById('fpsText'),
     temp: document.getElementById('tempDisplay'),
+    statNoise: document.getElementById('statNoise'),
     statDanger: document.getElementById('statDanger'),
     statSafe: document.getElementById('statSafe'),
     statTotal: document.getElementById('statTotal')
@@ -263,18 +259,19 @@ function handle(data) {
         cartCmd = data.cart;
     const raw = data.vectors || [];
     const filtered = [];
-    let danger = 0, safe = 0;
+    let noise = 0, danger = 0, safe = 0;
     for (let i = 0; i < raw.length; i++) {
         const d = raw[i].d;
-        if (d <= 0 || isNaN(d) || d > CONFIG.MAX_DISTANCE_MM) continue;
+        if (d <= 0 || isNaN(d) || d > CONFIG.MAX_DISTANCE_MM) { noise++; continue; }
         filtered.push(raw[i]);
         if (d <= CONFIG.DANGER_DISTANCE_MM) danger++;
-        else if (d <= CONFIG.SAFE_DISTANCE_MM) safe++;
+        else safe++;
     }
     radarData = filtered;
+    els.statNoise.textContent = noise;
     els.statDanger.textContent = danger;
     els.statSafe.textContent = safe;
-    els.statTotal.textContent = filtered.length;
+    els.statTotal.textContent = raw.length;
     updateFps();
 }
 
