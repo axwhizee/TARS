@@ -1,11 +1,9 @@
 /**
  * @file ld14p.c
  * @brief LD14P 激光雷达底层驱动
- * 关键设计:
- *   - ld14p_frame_t packed 结构体直接映射 47 字节线格式 (ESP32 LE = LSB-first)
- *   - 2 状态 FSM: 搜 0x54 帧头 → 拼 47B → VerLen+CRC8 双校
- *   - cloud_360[360] 持久化, 每圈自然覆盖, 不清空
- *   - 圈检测: start_angle 从 >300° 翻转到 <60° 时触发
+ *
+ * cloud_360[360] 持久化, 每圈自然覆盖不主动清零, distance==0 标记无效点.
+ * 圈检测用帧末点角度 (借鉴官方 SDK), 配合 150ms 防抖.
  */
 #include "drivers/ld14p.h"
 #include "freertos/FreeRTOS.h"
@@ -13,20 +11,24 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 #include <string.h>
+#include <math.h>
 
 #define HEADER           0x54
 #define VER_LEN          0x2C
-#define ANGLE_RES        100    // 0.01° 单位
+#define ANGLE_RES        100               // 0.01° → ° 换算系数
 #define CMD_SPEED        0xA2
-#define CRC_COVER        (FRAME_LEN - 1)   // CRC 覆盖前 46 字节
+#define CRC_COVER        (FRAME_LEN - 1)   // CRC 覆盖除最后一个字节外的全部
+#define LASER_TAN        0.11923f          // tan(6.8°), 固定激光夹角
+#define REV_DEBOUNCE_MS  150               // 圈检测防抖
 
 static const char *TAG = "LD14P ";
 
-static ld14p_point_t cloud_360[LD14P_POINTS_PER_REV];   /* 360° 点云, 持久化不清空 */
-static uint16_t prev_start_angle;                        /* 上一帧起始角度 (×0.01°) */
-static uint32_t rev_last_tick;                           /* 上次圈检测 tick */
-static volatile bool revolution_flag;                    /* 圈完成, 单次消费 */
-// CRC8 (多项式 0x4D)
+static vector_polar_t cloud_360[LD14P_POINTS_PER_REV];
+static float prev_last_deg;       // 上一帧末点角度, 用于跨零检测
+static uint32_t rev_last_tick;
+static bool rev_ready;
+
+// CRC8 查表 (多项式 0x4D)
 static const uint8_t CRC_TABLE[256] = {
     0x00, 0x4d, 0x9a, 0xd7, 0x79, 0x34, 0xe3,
     0xae, 0xf2, 0xbf, 0x68, 0x25, 0x8b, 0xc6, 0x11, 0x5c, 0xa9, 0xe4, 0x33,
@@ -52,7 +54,7 @@ static const uint8_t CRC_TABLE[256] = {
     0x5a, 0x06, 0x4b, 0x9c, 0xd1, 0x7f, 0x32, 0xe5, 0xa8
 };
 
-// CRC校验函数
+// CRC8 校验, 多项式 0x4D, init=0x00, 无最终 XOR
 static uint8_t crc8_calc(const uint8_t *data, uint8_t len) {
     uint8_t crc = 0x00;
     for (uint8_t i = 0; i < len; i++)
@@ -60,13 +62,22 @@ static uint8_t crc8_calc(const uint8_t *data, uint8_t len) {
     return crc;
 }
 
-const ld14p_frame_t *ld14p_feed_byte(uint8_t byte) {
+// 发送 0xA2 转速控制命令, speed = SENSOR_FREQ * 360 (°/s)
+static void send_freq_command() {
+    uint16_t speed = (uint16_t)SENSOR_FREQ * 360;
+    uint8_t cmd[8] = { HEADER, CMD_SPEED, 4, (uint8_t)(speed & 0xFF),
+        (uint8_t)(speed >> 8), 0x00, 0x00, 0x00 };
+    cmd[7] = crc8_calc(cmd, 7);
+    uart_write_bytes(LD14P_UART_NUM, cmd, sizeof(cmd));
+    ESP_LOGI(TAG, "LD14P set freq @ %d Hz (%d deg/s)", SENSOR_FREQ, speed);
+}
+
+const ld14p_frame_t *ld14p_parse(uint8_t byte) {
     typedef enum { S_IDLE, S_FRAME } state_t;
     static state_t state = S_IDLE;
     static uint8_t buf[FRAME_LEN];
     static uint8_t idx;
 
-    // S_IDLE: 丢弃所有非 0x54 字节, 命中后转入拼包
     if (state == S_IDLE) {
         if (byte == HEADER) {
             buf[0] = HEADER;
@@ -76,79 +87,93 @@ const ld14p_frame_t *ld14p_feed_byte(uint8_t byte) {
         return NULL;
     }
 
-    // S_FRAME: 逐字节拼包, 满 47B 后 VerLen + CRC8 双校
     buf[idx++] = byte;
     if (idx >= FRAME_LEN) {
         state = S_IDLE;
         idx = 0;
-
-        if (buf[1] != VER_LEN)       return NULL;   // 帧长标识不匹配
-        if (crc8_calc(buf, CRC_COVER) != buf[CRC_COVER])
-            return NULL;  /* CRC 失败 */
-
-        return (const ld14p_frame_t *)buf;  // ✅ 完整有效帧
+        // 帧长标识不匹配 → 丢弃
+        if (buf[1] != VER_LEN)       return NULL;
+        // CRC 校验失败 → 丢弃
+        if (crc8_calc(buf, CRC_COVER) != buf[CRC_COVER]) return NULL;
+        return (const ld14p_frame_t *)buf;
     }
     return NULL;
 }
 
-bool ld14p_process_frame(const ld14p_frame_t *frm) {
-    /* 
-    圈检测: 角度 >300°→<60° 即穿过 0° 线, 配合 150ms 防抖
-    注意: revolution_flag 在本帧置位, 但 cloud_360 中的点已由前面的帧填满
-     */
+const vector_polar_t *ld14p_collect(const ld14p_frame_t *frm) {
+    // 12 点在 start_angle~end_angle 间等间隔插值
+    int diff = (int)frm->end_angle - (int)frm->start_angle;
+    if (diff < 0) diff += 360 * ANGLE_RES;  // 跨 0° 补偿
+    float step_raw = (float)diff / (LD14P_POINTS_PER_PACK - 1);
+
+    float last_deg = 0.0f;
+    for (int i = 0; i < LD14P_POINTS_PER_PACK; i++) {
+        int raw_angle = (int)frm->start_angle + (int)(i * step_raw);
+        int deg = (raw_angle / ANGLE_RES) % LD14P_POINTS_PER_REV;
+        float angle_f = (float)raw_angle / ANGLE_RES;
+
+        cloud_360[deg].angle_deg = angle_f;
+        cloud_360[deg].distance_mm = (float)frm->points[i].distance;
+        if (i == LD14P_POINTS_PER_PACK - 1) last_deg = angle_f;
+    }
+
+    // 圈检测: 末点角度跨过 0° 线 (prev>340 且 current<20)
     uint32_t now = xTaskGetTickCount();
-    if (prev_start_angle > 30000 && frm->start_angle < 6000
-        && (now - rev_last_tick) > pdMS_TO_TICKS(150)) {    // 150ms防抖
-        revolution_flag = true;
+    if (prev_last_deg > 340.0f && last_deg < 20.0f
+        && (now - rev_last_tick) > pdMS_TO_TICKS(REV_DEBOUNCE_MS)) {
+        rev_ready = true;
         rev_last_tick = now;
     }
-    prev_start_angle = frm->start_angle;
+    prev_last_deg = last_deg;
 
-    // 角度插值: 12 点在 start_angle~end_angle 间等间隔分布
-    int diff = (int)frm->end_angle - (int)frm->start_angle;
-    if (diff < 0) diff += 360 * ANGLE_RES;               // 跨 0° 补偿
-    float step = (float)diff / (LD14P_POINTS_PER_PACK - 1);
-
-    for (int i = 0; i < LD14P_POINTS_PER_PACK; i++) {
-        int deg = (frm->start_angle + (int)(i * step)) / ANGLE_RES;
-        deg %= LD14P_POINTS_PER_REV;                     // 归一化到 0~359°
-        cloud_360[deg] = frm->points[i];                 // 覆盖写入
+    if (rev_ready) {
+        rev_ready = false;  // 单次消费, 阻止同一圈重复返回
+        return cloud_360;
     }
-
-    return revolution_flag ? (revolution_flag = false, true) : false;
+    return NULL;
 }
 
-// 传递数组指针
-uint16_t ld14p_get_cloud(vector_polar_t (*out)[LD14P_POINTS_PER_REV]) {
-    uint16_t valid = 0;
-    for (int i = 0; i < LD14P_POINTS_PER_REV; i++) {
-        (*out)[i].angle_deg = (float)i;     // 直接对应 360 点的整数角度
-        (*out)[i].distance_mm = (float)cloud_360[i].distance;
-        if (cloud_360[i].distance < 6000) valid++;  // 6000mm 以内为有效感知范围
-    }
-    return valid;
-}
+void ld14p_calibrate(vector_polar_t *points, float offset_x, float offset_y) {
+    /*
+     * SlTransform (参照官方 SDK):
+     *   - 激光器偏离旋转中心 (offset_x, offset_y), 且发光方向有固定夹角
+     *   - 公式: x = dist + offset_x
+     *          y = dist * LASER_TAN + offset_y
+     *          shift = atan2(y, x) * 180/π
+     *          angle_corrected = angle_raw - shift (左手系)
+     */
+    static float last_shift = 0.0f;
 
-// 发送频率指令
-static void send_freq_command(uint8_t freq_hz) {
-    // 0xA2 命令: 8 字节, CRC 覆盖前 7 字节
-    uint16_t speed = (uint16_t)SENSOR_FREQ * 360;
-    uint8_t cmd[8] = { HEADER, CMD_SPEED, 4, (uint8_t)(speed & 0xFF),
-        (uint8_t)(speed >> 8), 0x00, 0x00, 0x00 };
-    cmd[7] = crc8_calc(cmd, 7);
-    uart_write_bytes(LD14P_UART_NUM, cmd, sizeof(cmd));
-    ESP_LOGI(TAG, "LD14P set freq @ %d Hz (%d deg/s)", SENSOR_FREQ, speed);
+    for (uint16_t i = 0; i < LD14P_POINTS_PER_REV; i++) {
+        float dist = points[i].distance_mm;
+        float angle = points[i].angle_deg;
+        float shift;
+
+        if (dist > 0.0f) {
+            float x = dist + offset_x;
+            float y = dist * LASER_TAN + offset_y;
+            shift = atan2f(y, x) * 180.0f / 3.14159f;
+            last_shift = shift;
+        } else {
+            shift = last_shift;     // 无效点沿用上次有效 shift, 避免角度跳变
+        }
+
+        angle -= shift;
+        // 归一化到 [0, 360)
+        if (angle > 360.0f) angle -= 360.0f;
+        if (angle < 0.0f)   angle += 360.0f;
+        points[i].angle_deg = angle;
+    }
 }
 
 esp_err_t ld14p_init() {
     if (SENSOR_FREQ < 2 || SENSOR_FREQ > 8) return ESP_ERR_INVALID_ARG;
 
-    memset(cloud_360, 0xFF, sizeof(cloud_360));   // 0xFFFF = 未填充
-    prev_start_angle = 0;
-    revolution_flag = false;
+    memset(cloud_360, 0, sizeof(cloud_360));
+    prev_last_deg = 0.0f;
+    rev_ready = false;
     rev_last_tick = 0;
 
-    // UART1: 115200-8N1, TX=17→PWM/RX, RX=18←TX
     uart_config_t cfg = {
         .baud_rate = LD14P_UART_BAUD,
         .data_bits = UART_DATA_8_BITS,
@@ -165,15 +190,15 @@ esp_err_t ld14p_init() {
         UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) return err;
 
-    // event_queue=NULL → sensor 任务必须用 timeout=0 非阻塞读取，4096B RX ring
+    // event_queue=NULL → 上层必须使用 timeout=0 非阻塞读取
     err = uart_driver_install(LD14P_UART_NUM, LD14P_UART_RX_BUF * 2, 0, 0, NULL, 0);
     if (err != ESP_OK) return err;
 
-    // 等 UART 稳定 → 发速率命令 → 等电机响应
+    // 等电机上电稳定 → 发频率命令 → 等电机响应
     vTaskDelay(pdMS_TO_TICKS(100));
-    send_freq_command(SENSOR_FREQ);
+    send_freq_command();
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    ESP_LOGI(TAG, "LD14P initialized (UART1 TX:17 RX:18) @ %d Hz", SENSOR_FREQ);
+    ESP_LOGI(TAG, "LD14P initialized @ %d Hz", SENSOR_FREQ);
     return ESP_OK;
 }
