@@ -18,7 +18,7 @@ static const struct {
 } flame_sensors[FLAME_SENSOR_COUNT] = {
     {11, 300.0f},   /* 左侧 */
     {12, 330.0f},   /* 左前方 */
-    {15,   0.0f},   /* 正前方 (中心) */
+    {16,   0.0f},   /* 正前方 (中心) — 暂未飞线, 上拉保持 HIGH → 无火 */
     {13,  30.0f},   /* 右前方 */
     {14,  60.0f},   /* 右侧 */
 };
@@ -50,7 +50,7 @@ void flame_task(void *pvParameters) {
             for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
                 data[i].angle_deg = flame_sensors[i].angle_deg;
                 bool flame_detected = (gpio_get_level(flame_sensors[i].gpio) == 0);
-                data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 65535.0f;
+                data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 0.0f;
             }
 
             for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {

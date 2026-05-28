@@ -1,10 +1,14 @@
 /**
  * @file motor_task.c
- * @brief 电机控制任务: EMA 插值平滑 + 笛卡尔→差速转换 + 状态机 + 换向死区
+ * @brief 电机控制任务: EMA 平滑 + 三态差速转换 + 换向死区
+ *
+ * 三态决策 (基于 EMA 滤波后的 cmd):
+ *   1. 死区: |x|=|y|≈0      → 停车 (M_IDLE)
+ *   2. 差速: 正常行驶/后退   → lin ± ang
+ *   3. 原地转向: x<0 且侧向力主导 → 清零前进分量, 纯差速旋转
  */
 #include "tasks/motor_task.h"
 #include "drivers/drv8833.h"
-#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -50,34 +54,38 @@ static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) 
 typedef enum { M_IDLE, M_FWD, M_REV } motor_dir_t;
 
 /**
- * @brief 笛卡尔向量 → 差速PWM (含死区/归一化/限幅)
+ * @brief 滤波后 cmd → 差速占空比 (三态决策)
  * @return 当前运动方向 (用于换向死区判断)
  */
-static inline motor_dir_t motor_cart_to_pwm(const motor_ema_t *ema, int8_t *l, int8_t *r) {
+static inline motor_dir_t motor_cmd_to_duty(const motor_ema_t *ema, int8_t *l, int8_t *r) {
     float x = ema->dx, y = ema->dy;
-    
-    // 死区判断
+
+    // --- 态 1: 死区 ---
     if (fabsf(x) < MOTOR_DEADZONE_MM && fabsf(y) < MOTOR_DEADZONE_MM) {
-        *l = *r = 0;
+        *l = *r = 10;   // 低速前进避免停滞
         return M_IDLE;
     }
-    
-    // 归一化 + 差速混合
-    float lin = x / MOTOR_MAX_MM;                    // [-1, 1]
+
+    // cmd → [-1, 1]: 除以 MOTOR_MAX_MM 等效于除以 60 → duty%
+    float lin = x / MOTOR_MAX_MM;
     float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
-    
+
+    // --- 态 3: 原地转向 (x<0 且侧向力主导时清零前进分量) ---
+    if (x < 0 && fabsf(ang) > fabsf(lin) * 2.0f) {
+        lin = 0;
+    }
+
     float left  = lin - ang;
     float right = lin + ang;
-    
+
     // 比例限幅 (保持转向比)
     float m = fmaxf(fabsf(left), fabsf(right));
     if (m > 1.0f) { left /= m; right /= m; }
-    
-    // 转换为百分比占空比 [-100, 100]
-    *l = (int8_t)roundf(left  * 100.0f);
+
+    *l = (int8_t)roundf(left  * 100.0f) / 2;    // 减慢后退速度
     *r = (int8_t)roundf(right * 100.0f);
-    
-    // 返回方向供死区判断
+
+    // 态 2: 正常差速 (x>0 前进, x<0 后退 — 公式自动处理 reversed steering)
     return (x > 0) ? M_FWD : M_REV;
 }
 
@@ -106,9 +114,9 @@ void motor_task(void *pvParameters) {
         // EMA滤波 (含超时归零)
         motor_ema_update(pcmd, &ema);
         
-        // 笛卡尔→差速PWM + 方向判断
+        // 笛卡尔→差速PWM (三态决策)
         int8_t l_duty, r_duty;
-        motor_dir_t curr_dir = motor_cart_to_pwm(&ema, &l_duty, &r_duty);
+        motor_dir_t curr_dir = motor_cmd_to_duty(&ema, &l_duty, &r_duty);
         
         // 换向死区保护 (仅方向反转时制动)
         if (motor_is_reversal(prev_dir, curr_dir)) {
