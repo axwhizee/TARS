@@ -133,7 +133,7 @@ static inline void motor_apply_simple(float x, float y) {
     // 走廊(dy≈0,dx大): boost≈1.15→不转  靠墙(dy有明显值): boost逐增
     ang *= 1.0f + (fabsf(ang) + 0.12f) / (fabsf(lin) + 0.10f);
     if (lin < 0.0f) {
-        ang += copysignf(0.08f, y);   // 对称破缺偏置
+        ang += copysignf(0.1f, y);   // 对称破缺偏置
         lin *= 0.4f;                  // 后退减速
     }
 
