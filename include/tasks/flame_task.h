@@ -1,6 +1,6 @@
 /**
  * @file flame_task.h
- * @brief 火焰传感器任务 — 5 路 GPIO 检测 + 虚拟障碍物注入
+ * @brief 火焰传感器任务 — FLAME_SENSOR_COUNT 路 GPIO 检测 + 虚拟障碍物注入
  */
 #pragma once
 #include "apf_common.h"

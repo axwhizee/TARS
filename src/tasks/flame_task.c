@@ -1,6 +1,6 @@
 /**
  * @file flame_task.c
- * @brief 火焰传感器任务 — 4Hz GPIO 采样, 非阻塞跳过模式
+ * @brief 火焰传感器任务 — SENSOR_FREQ Hz GPIO 采样, 非阻塞跳过模式
  */
 #include "tasks/flame_task.h"
 #include "freertos/FreeRTOS.h"

@@ -16,16 +16,15 @@
 static const char *TAG = "LIDAR_TASK";
 
 /**
- * @brief 360 → 72 扇区降采样, 最小值加权平均, 同时统计有效原始点数
+ * @brief LD14P_POINTS_PER_REV → LIDAR_SECTORS 扇区降采样, 最小值加权平均
  *
- * 区间大小 sector_width = 360 / 72 = 5.
  * 加权公式: out = (Σ valid_points + LIDAR_MIN_WEIGHT × d_min) /
  *                 (valid_pts + LIDAR_MIN_WEIGHT)
  *
- * distance ≤ 0 的点跳过; distance ∈ (0, 6000) 计入 *valid_out.
+ * distance ≤ 0 的点跳过; 有效点计入 *valid_out.
  *
- * @param raw       360 原始点云
- * @param valid_out [出参] distance ∈ (0, 6000) 的原始有效点数
+ * @param raw       原始全周点云
+ * @param valid_out [出参] 有效感知区点数
  * @return 扇区数组指针 (静态 buffer, 下次调用覆盖)
  */
 static const vector_polar_t *lidar_process(

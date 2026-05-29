@@ -1,6 +1,6 @@
 /**
  * @file temp_task.c
- * @brief DS18B20 温度传感器任务 — 4Hz 周期性采样, 非阻塞跳过模式
+ * @brief DS18B20 温度传感器任务 — SENSOR_FREQ Hz 周期性采样, 非阻塞跳过模式
  */
 #include "tasks/temp_task.h"
 #include "drivers/ds18b20.h"
@@ -29,7 +29,7 @@ void temp_task(void *pvParameters) {
             continue;
         }
 
-        /* 等待转换完成 (10-bit = 188ms, 留足余量) */
+        /* 等待转换完成 (DS18B20_RES_BITS bit, 留足余量) */
         vTaskDelay(pdMS_TO_TICKS(200));
 
         float temp = ds18b20_read_temp();

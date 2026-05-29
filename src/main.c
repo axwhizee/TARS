@@ -14,8 +14,6 @@
  * app_main() 返回后 FreeRTOS 调度器自动启动.
  * 所有单位: 距离 mm, 时间 ms, 角度 °.
  */
-#include "apf_common.h"
-#include "sys_init.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,6 +21,8 @@
 #include "freertos/event_groups.h"
 #include "esp_log.h"
 
+#include "apf_common.h"
+#include "sys_init.h"
 #include "drivers/ld14p.h"
 #include "drivers/ds18b20.h"
 #include "drivers/drv8833.h"
@@ -57,28 +57,6 @@ static void vLedTask(void *pvParameters) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
-
-#ifdef DEBUG
-static void vTestVectorTask(void *pvParameters) {
-    (void)pvParameters;
-    const int step_ms = 250;
-    int pct_a = 100, pct_b = 100;
-
-    ESP_LOGI(TAG, "=== Motor ramp test: 0→100%%, step=%dms ===", step_ms);
-
-    while (1) {
-        while (pct_b != -100) {
-            pct_b -= 10;
-            motor_set((int8_t)pct_a, (int8_t)pct_b);
-            ESP_LOGI(TAG, "motor set: A %d%%, B %d%%", pct_a, pct_b);
-            vTaskDelay(pdMS_TO_TICKS(step_ms));
-        }
-        pct_b = 100;
-        pct_a -= 10;
-        if (pct_a == -100) pct_a = 100;
-    }
-}
-#endif
 
 void app_main(void) {
     ESP_LOGI(TAG, "\nSystem Initializing...\n");
@@ -115,7 +93,6 @@ void app_main(void) {
 
     // 4. 创建 FreeRTOS 任务 (优先级数字越大越高)
 
-#ifndef DEBUG
     motor_set(0, 0);
     // 心跳 LED，优先级最低
     xTaskCreate(vLedTask,    "LedTask",    2048, NULL, 1, NULL);
@@ -130,9 +107,6 @@ void app_main(void) {
     // 日志上传任务 (WebSocket 服务端)，低优先级，与数据流解耦
     xTaskCreate(web_task,    "web_task",   8192, NULL, 3, NULL);
     vTaskDelay(pdMS_TO_TICKS(1000));    // 1s 缓冲
-#else
-    xTaskCreate(vTestVectorTask, "TestVector", 2048, NULL, 4, NULL);
-#endif
 
     ESP_LOGI(TAG, "App_main done, scheduler starting...\n");
 }

@@ -107,8 +107,8 @@ DS18B20_PIN         9   // TEMP-DQ
 
 // 火焰传感器配置
 
-#define FLAME_SENSOR_COUNT      5           // 火焰传感器路数
-#define FLAME_DETECT_MM         500.0f      // 火焰信号转换的距离
+#define FLAME_SENSOR_COUNT      5       // 火焰传感器路数
+#define FLAME_DETECT_MM         500.0f  // 火焰信号转换的距离
 
 // DS18B20 温度传感器配置
 
@@ -117,14 +117,15 @@ DS18B20_PIN         9   // TEMP-DQ
 // APF 人工势场法参数，距离单位统一为 mm
 
 #define Q_POLAR_DEPTH   (LIDAR_SECTORS + FLAME_SENSOR_COUNT)    // 传感器数据统一队列
-
 #define APF_SAFE_RANGE      4000.0f     // 安全感知范围，超出视为噪声。由于实际雷达数据偏小，应小于6000
-#define APF_DANGER_RANGE    600.0f      // 危险区阈值
+#define APF_DANGER_RANGE    800.0f      // 危险区阈值
 #define APF_PERCEPTION_MIN  100.0f      // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
 #define APF_ATTRACT_GAIN    4000.0f     // 引力增益 (K_att)，目前仅用于产生前向行进引力，影响小车的速度
 // #define APF_REPULSE_GAIN    APF_ATTRACT_GAIN * APF_DANGER_RANGE / 14  // 斥力增益 (K_rep)
-#define APF_REPULSE_GAIN    42.0f      // 斥力增益 (K_rep)，目前影响制动距离
+#define APF_REPULSE_GAIN    40.0f       // 斥力增益 (K_rep)，目前影响制动距离
 #define APF_DANGER_RE_WT    1.2f        // 危险区斥力权重倍率
+#define APF_SAFE_RE_WT      0.8f        // 感知区斥力权重倍率
+#define APF_OPEN_GAIN       (APF_ATTRACT_GAIN * 0.3f)  // 开阔方向引力 (补充前向力)
 
 // 电机驱动配置
 
@@ -134,15 +135,12 @@ DS18B20_PIN         9   // TEMP-DQ
 #define MOTOR_MIN_DUTY      75          // 能克服电机静摩擦力的最低有效占空比，需根据实测情况设置
 #define MOTOR_MIN_COUNT     (MOTOR_MAX_COUNT * MOTOR_MIN_DUTY / 100U)    // 占空比对应的计数器值
 
-#define MOTOR_FREQ_HZ       SENSOR_FREQ * 2 // 电机控制任务频率，为传感器工作频率的两倍
+#define MOTOR_FREQ_HZ       SENSOR_FREQ * 2     // 电机控制任务频率，为传感器工作频率的两倍
 #define MOTOR_TIMEOUT_MS    1000        // 指令超时阈值，超时停车
 #define MOTOR_DEADZONE_MM   50.0f       // 笛卡控制尔死区
-#define MOTOR_TURN_RATIO    0.1f        // 差速转向中角分量的灵敏度
-#define MOTOR_DEADTIME_MS   20          // 换向死区制动保持时长，抑制电流冲击
-#define MOTOR_MAX_MM        4000.0f     // 输出幅值上限，用于向量归一化，影响平均速度
+#define MOTOR_TURN_RATIO    0.2f        // 差速转向中角分量的灵敏度
+#define MOTOR_MAX_MM        APF_SAFE_RANGE  // 输出幅值上限，用于向量归一化，影响平均速度
 #define MOTOR_EMA_TAU_MS    50          // EMA时间常数 τ (ms), 控制平滑收敛速度
-// α = 1 - exp(-dt/τ) (dt = 1000/MOTOR_FREQ_HZ = 125ms)
-// α：步响应速度，影响响应速度，趋于1时响应更快，取决于TAU（衰减到0.37需要的时间）
+// α = 1 - exp(-dt/τ),  dt = 1000/MOTOR_FREQ_HZ,  τ = MOTOR_EMA_TAU_MS
+// α 越大响应越快 (τ 越小时 α 越接近 1)
 #define MOTOR_EMA_ALPHA     (1.0f - expf(-(float)(1000 / MOTOR_FREQ_HZ) / MOTOR_EMA_TAU_MS))
-
-// #define DEBUG

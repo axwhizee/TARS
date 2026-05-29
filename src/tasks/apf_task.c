@@ -2,12 +2,13 @@
  * @file apf_task.c
  * @brief 人工势场法避障实现
  *
- * 核心公式 (2D APF):
- *   斥力:  F_rep = -K_rep * w(ra) / ra² * û(θ)
- *          û = (cosθ, sinθ),  w(ra) = { danger_wt, ra ≤ 800mm; 1.0, 800 < ra ≤ 4000mm }
- *   引力:  F_att = (K_att, 0)
- *   合力:  F_total = F_att + Σ F_rep
- *   单位:  距离 mm, 合力无量纲 (电机任务归一化后转为占空比)
+ * 斥力:  F_rep = -K_rep * w(ra) / ra² * û(θ)
+ *        û = (cosθ, sinθ)
+ *        w(ra) = { APF_DANGER_RE_WT,  ra ≤ APF_DANGER_RANGE
+ *                { APF_SAFE_RE_WT,    ra ≤ APF_SAFE_RANGE
+ * 引力:  F_att = (K_att, 0)  +  F_open (前方 120° 开阔方向)
+ *        x 分量 = 1/r² 控后退时机, y 分量 = 1/r 均化转向力
+ * 单位: 距离 mm, 合力无量纲 (电机任务归一化后转为占空比)
  */
 #include "tasks/apf_task.h"
 #include "freertos/FreeRTOS.h"
@@ -29,15 +30,15 @@ vector_cart_t g_cart_cmd;
  */
 static inline float repulse_weight(float distance) {
     if (distance <= APF_DANGER_RANGE) {
-        return APF_DANGER_RE_WT;   // 危险区：斥力加权
+        return APF_DANGER_RE_WT;   // 危险区权重
     }
-    return 1.0f;    // 感知区：权重不变
+    return APF_SAFE_RE_WT;  // 感知区权重
 }
 
 void apf_task(void *pvParameters) {
     (void)pvParameters;
     const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ + 10);    // 等待周期（+10ms 余量）
-    vector_polar_t  samples[Q_POLAR_DEPTH];  // 批量读取缓冲区: 72 lidar + 5 flame
+    vector_polar_t  samples[Q_POLAR_DEPTH];
     vector_polar_t  tmp;
     vector_cart_t   cmd;                     // 合力指令输出 (→ q_cart → motor_task)
     float rfx, rfy;                          // 斥力分量累计
@@ -79,12 +80,21 @@ void apf_task(void *pvParameters) {
         n_safe = 0;
         rfx = 0.0f;
         rfy = 0.0f;
+        float max_range = 0.0f;     // 追加引导矢量
+        float open_angle = 0.0f;
 
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-            float range = samples[i].distance;   // 距离 (mm), 用于分类和权重
+            float range = samples[i].distance;
+            float angle = samples[i].angle;
+
+            // 查找前方 120° 最大距离，用于指示开阔方向
+            if (range > max_range && (angle <= 60.0f || angle >= 300.0f)) {
+                max_range = range;
+                open_angle = angle;
+            }
 
             if (range < APF_PERCEPTION_MIN || range > APF_SAFE_RANGE) {
-                n_noise++;      // 噪声/死区, 跳过不计
+                n_noise++;      // 噪声/死区, 跳过
                 continue;
             } else if (range <= APF_DANGER_RANGE) {
                 n_danger++;     // 危险区
@@ -92,22 +102,23 @@ void apf_task(void *pvParameters) {
                 n_safe++;       // 感知区
             }
 
-            float rad   = samples[i].angle * (M_PI / 180.0f);   // ° → rad
-            float ra    = range * 0.001f;   // mm → m, 防止 ra² 溢出
-            float ra_sq = ra * ra;  // 临时改为三次
-            // F_rep = -K_rep * w(range) / ra² * û(θ) , û = (cosθ, sinθ)
-            float f_rep = APF_REPULSE_GAIN * repulse_weight(range) / ra_sq;
-            rfx -= f_rep * cosf(rad);   // x 分量 (负号: 力背离障碍物)
-            rfy -= f_rep * sinf(rad);   // y 分量
+            float rad = angle * (M_PI / 180.0f);
+            float ra = range * 0.001f;  // mm → m
+            float rep = APF_REPULSE_GAIN * repulse_weight(range);
+            rfx -= (rep / (ra * ra)) * cosf(rad);   // 1/r²: 切向采用平方反比
+            rfy -= (rep / ra) * sinf(rad);          // 1/r : 垂向采用线性反比
         }
 
-        // F_total = F_att + Σ F_rep (引力沿 x 轴正向, 驱动机器人前行)
         cmd.dx = rfx + APF_ATTRACT_GAIN;
         cmd.dy = rfy;
+        if (max_range > APF_PERCEPTION_MIN) {
+            float open_rad = open_angle * (M_PI / 180.0f);
+            cmd.dx += APF_OPEN_GAIN * cosf(open_rad);   // 合成追加引导矢量
+            cmd.dy += APF_OPEN_GAIN * sinf(open_rad);
+        }
         g_cart_cmd = cmd;   // 复制一份供日志更新
 
         xQueueOverwrite(q_cart, &cmd);
-        // 添加换行，表示一次完整任务流程结束
         ESP_LOGI(TAG, "F_cmd = (%.0f,%.0f) | danger=%d safe=%d noise=%d",
             cmd.dx, cmd.dy, n_danger, n_safe, n_noise);
     }

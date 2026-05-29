@@ -28,7 +28,7 @@ ESP32_Template/
 │   │   └── drv8833.c             # DRV8833 LEDC PWM 输出 + 制动
 │   └── tasks/
 │       ├── web_task.c            # HTTP 文件服务 (SPIFFS) + WebSocket JSON 推送
-│       ├── lidar_task.c          # LiDAR 数据采集 + 360→72 降采样
+│       ├── lidar_task.c          # LiDAR 数据采集 + 360→60 降采样
 │       ├── flame_task.c          # 5 路火焰检测 + 极坐标映射
 │       ├── temp_task.c           # DS18B20 周期采样 (4Hz)
 │       ├── apf_task.c            # 人工势场法避障解算
@@ -54,8 +54,8 @@ ESP32_Template/
 |---|---|---|---|---|
 | `LedTask` | 1 | 2048 | 1Hz | 心跳 LED 翻转 |
 | `web_task` | 3 | 8192 | 事件驱动 | HTTP 服务器 + SPIFFS 文件服务 + WebSocket JSON 推送 |
-| `apf` | 4 | 4096 | ~4Hz | 人工势场解算: 引力+斥力→合力→q_cart |
-| `ld14p` | 5 | 8192 | 事件驱动 | UART 读帧, CRC8 校验, 360→72 降采样 |
+| `apf` | 4 | 4096 | 4Hz | 人工势场解算: 前向引力 + 间隙跟随引力 + 拆分斥力 (x:1/r², y:1/r) |
+| `ld14p` | 5 | 8192 | 事件驱动 | UART 读帧, CRC8 校验, 360→60 降采样 |
 | `temp` | 6 | 4096 | 4Hz | DS18B20 温度采集 |
 | `flame` | 7 | 2048 | 4Hz | 5 路红外火焰状态检测 |
 | `motor` | 8 | 4096 | 8Hz | EMA 平滑 + 差速分解 + PWM 输出 |
@@ -66,10 +66,10 @@ ESP32_Template/
 
 | 队列 | 深度 | 元素类型 | 生产者 → 消费者 |
 |---|---|---|---|
-| `q_polar` | 77 | `vector_polar_t` | LiDAR(72) + Flame(5) → APF |
+| `q_polar` | 65 | `vector_polar_t` | LiDAR(60) + Flame(5) → APF |
 | `q_cart` | 1 | `vector_cart_t` | APF → Motor (xQueueOverwrite) |
 | `q_temp` | 4 | `float` | DS18B20 → web_task |
-| `q_log` | 77 | `vector_polar_t` | APF → web_task |
+| `q_log` | 65 | `vector_polar_t` | APF → web_task |
 
 ### 事件组 `eg_sync`
 
@@ -88,12 +88,12 @@ graph TD
     FLAME[5ch IR Flame<br/>GPIO 11-14,16] -->|5 status bits| FL_TASK[flame<br/>prio:7]
     DS18B20[DS18B20 Temp<br/>GPIO9 1-Wire] -->|float °C| TEMP[temp<br/>prio:6]
 
-    LIDAR -->|72 polar vectors| QP[q_polar<br/>depth:77]
+    LIDAR -->|60 polar vectors| QP[q_polar<br/>depth:65]
     FL_TASK -->|5 polar vectors| QP
     TEMP -->|float| QT[q_temp<br/>depth:4]
 
     QP --> APF[apf<br/>prio:4]
-    APF -->|77 polar vectors| QL[q_log<br/>depth:77]
+    APF -->|65 polar vectors| QL[q_log<br/>depth:65]
     APF -->|cartesian cmd| QC[q_cart<br/>depth:1]
 
     QL --> WEB[web_task<br/>prio:3]
@@ -136,7 +136,7 @@ JSON 帧结构 (cJSON 序列化, 每帧 ~2.5KB):
 
 - `ts`: esp_timer_get_time() 微秒时间戳
 - `temp`: 温度值 (°C)，无数据时为 `NaN`
-- `vectors`: 77 个极坐标点 `{angle_deg, distance_mm}` (72 LiDAR + 5 Flame)
+- `vectors`: 65 个极坐标点 `{angle_deg, distance_mm}` (60 LiDAR + 5 Flame)
 
 ## 构建与烧录
 
@@ -173,7 +173,7 @@ pio run -t upload -t uploadfs -t monitor
 
 ### DEBUG 模式
 
-在 `apf_common.h` 中取消注释 `#define DEBUG`（或通过 `build_flags = -D DEBUG`），系统将跳过所有传感器与控制任务，仅执行电机 ramp 测试序列。生产运行时务必禁用。
+在 `apf_common.h` 中取消注释 `#define DEBUG`（或通过 `build_flags = -D DEBUG`），系统将跳过所有传感器与控制任务，仅执行电机 ramp 测试序列。生产运行时务必禁用。当前 DEBUG 定义位于 `src/main.c` 中，优先级最高。
 
 ## SDK 关键配置 (`sdkconfig.defaults`)
 
@@ -195,9 +195,11 @@ pio run -t upload -t uploadfs -t monitor
 
 ## 关键设计决策
 
-- **双频率解耦**: APF 势场解算 ~4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ=150ms) 消除帧间抖动
+- **双频率解耦**: APF 势场解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ 可调, 默认 25ms) 消除帧间抖动
 - **无锁同步**: FreeRTOS 事件组 + 队列完成所有任务间通信, 无共享内存竞争
-- **极坐标统一**: LiDAR 72 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, APF 算法输入为 77 维齐次向量
+- **极坐标统一**: LiDAR 60 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, APF 算法输入为 65 维齐次向量
+- **拆分斥力剖面**: x 分量使用 1/r² 控制后退时机, y 分量使用 1/r 使转向力分布更均匀, 避免近距爆发
+- **间隙跟随**: 前方 120° 锥形内最开阔方向施加补充引力 (APF_OPEN_GAIN), 使小车沿走廊方向行进而非在两墙间折返
 - **日志无阻塞**: Web 任务仅等 BIT_LOG_Q_READY, 温度非阻塞取最新值, 确保雷达数据流不因低速传感器卡顿
 - **板载 Web 可视化**: Canvas 2D API 实现极坐标雷达图, 无任何 CDN 依赖, 13KB 文件通过 SPIFFS 部署在 ESP32 上
 - **Wi-Fi AP 模式**: 开放热点, 无需外部路由器, 任何设备连接后即可打开网页查看雷达

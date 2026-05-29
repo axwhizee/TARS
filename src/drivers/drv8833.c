@@ -102,7 +102,8 @@ esp_err_t motor_init(void) {
 
     // 初始化为滑行状态 (所有通道占空比 0)
     motor_coast();
-    ESP_LOGI(TAG, "Motor initialized (20kHz, 10-bit, max_eff=%d, min_eff=%d)", MOTOR_MAX_COUNT, MOTOR_MIN_COUNT);
+    ESP_LOGI(TAG, "Motor initialized (%dHz, %d-bit, max_eff=%d, min_eff=%d)",
+        MOTOR_PWM_FREQ, MOTOR_PWM_RES_BITS, MOTOR_MAX_COUNT, MOTOR_MIN_COUNT);
     return ESP_OK;
 }
 

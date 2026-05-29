@@ -2,7 +2,7 @@
  * @file ld14p.c
  * @brief LD14P 激光雷达底层驱动
  *
- * cloud_360[360] 持久化, 每圈自然覆盖不主动清零, distance==0 标记无效点.
+ * cloud_360[LD14P_POINTS_PER_REV] 持久化, 每圈自然覆盖不主动清零, distance==0 标记无效点.
  * 圈检测用帧末点角度 (借鉴官方 SDK), 配合 150ms 防抖.
  */
 #include "drivers/ld14p.h"

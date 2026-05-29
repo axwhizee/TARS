@@ -34,20 +34,20 @@
 3. **共地**：必须连接GND
 4. **ESP32-S3 推荐 UART1 引脚**：TX=GPIO17, RX=GPIO18（勿用GPIO16）
 
-## 三、驱动代码结构
+## 三、驱动与任务架构
+
+### 文件结构
 
 ```
 ├── include/
-│   ├── drivers/ld14p.h        ← 驱动API: init, feed_byte, scan_ready, get_scan
-│   └── tasks/
-│       ├── lidar_task.h       ← 传感器任务声明
-│       └── logger.h           ← 通用日志任务（与LD14解耦）
+│   ├── apf_common.h              ← LD14P/UART 宏定义 (波特率, 扇区数, 串口号)
+│   ├── drivers/ld14p.h           ← 驱动 API: init, parse, collect, calibrate
+│   └── tasks/lidar_task.h        ← 传感器任务声明
 └── src/
-    ├── main.c                 ← ld14p_init(4) + xQueueCreate(360) + 任务创建
-    ├── drivers/ld14p.c        ← 协议状态机, CRC8, 圈检测, 频率命令
+    ├── main.c                    ← ld14p_init() + 队列/事件组创建
+    ├── drivers/ld14p.c           ← 协议状态机, CRC8, 圈检测, 频率命令
     └── tasks/
-        ├── lidar_task.c       ← 传感器任务: 连续读UART→状态机→推送队列
-        └── logger.c           ← 日志任务: 每2秒取360点→UART0上传
+        └── lidar_task.c          ← UART 轮询 → 状态机 → 360→60 降采样 → q_polar
 ```
 
 ### 数据流
@@ -57,34 +57,67 @@ TX(17)──→ LD14P PWM/RX (频率命令)
 RX(18)──← LD14P TX (115200, 47字节数据包)
     │
     ▼
-ld14p_sensor_task (prio 5, stack 8192 words)
-    ├─ uart_read_bytes → ld14p_feed_byte → 状态机 → cloud_360[]
-    └─ ld14p_scan_ready → ld14p_get_scan
-         → xQueueReset(queue) → xQueueSend ×360
-                                 │
-                          Queue[360] vector_polar_t
-                                 │
-logger_task (prio 4, 每2秒)
-    └─ xQueueReceive ×360 → UART0: [0xAA][len][360×vector_polar_t]
+ld14p_task (prio 5, stack 8192 words)
+    ├─ uart_read_bytes → ld14p_parse(byte) → 状态机拼帧
+    ├─ ld14p_collect(frm) → cloud_360[360] + 圈检测
+    └─ [一圈完成] lidar_process(cloud) → 60 sectors
+         → xQueueSend ×60 to q_polar[65]
+                    │
+              q_polar (depth 65: 60 lidar + 5 flame)
+                    │
+              apf_task (prio 4)
+                    │
+            q_cart[1] + q_log[65] + WebSocket JSON
 ```
 
-### 各函数职责
+### 功能拆分
 
-| 函数 | 职责 |
+| 文件 | 职责 |
 |------|------|
-| `ld14p_init(freq_hz)` | 初始化UART1(115200), 重置cloud_360, 发送0xA2频率命令 |
-| `ld14p_feed_byte(byte)` | 字节级状态机: 搜帧头0x54→拼47字节→CRC→解析12点→插值→更新cloud_360[] |
-| `ld14p_scan_ready()` | 检测是否完成一整圈扫描（角度从>30000翻转到<6000时置位），**每次调用消耗该标志** |
-| `ld14p_get_scan(out, count)` | 加锁拷贝cloud_360[]快照到用户缓冲区（角度0~359, 距离mm） |
+| `drivers/ld14p.c` | **协议层** — 状态机拼 47B 帧, CRC8 校验, 角度插值, 圈检测 (跨 0° + 防抖) |
+| `tasks/lidar_task.c` | **数据层** — UART 非阻塞轮询, 馈入状态机, 一圈完成后降采样 360→60, 推入 q_polar |
+| `include/drivers/ld14p.h` | 帧结构定义 (`ld14p_frame_t`), `ld14p_point_t`, 驱动 API 声明 |
+
+### API 函数
+
+| 函数 | 签名 | 职责 |
+|------|------|------|
+| `ld14p_init()` | `esp_err_t → esp_err_t` | 初始化 UART1 (115200), 清 cloud_360, 发送 0xA2 频率命令 (目标频率=SENSOR_FREQ) |
+| `ld14p_parse(byte)` | `uint8_t → const ld14p_frame_t *` | 字节级状态机: 搜帧头 0x54 → 拼 47B → VerLen 检查 → CRC8 验证 → 返回帧指针 |
+| `ld14p_collect(frm)` | `const ld14p_frame_t * → const vector_polar_t *` | 角度插值写入 cloud_360[360], 圈检测 (末点跨 0° + 150ms 防抖), 完成一圈返回 cloud_360 指针, 未完成返回 NULL |
+| `ld14p_calibrate(pts, x, y)` | `vector_polar_t *, float, float → void` | 几何标定: 根据激光器偏离旋转中心的 offset 修正角度 (当前未启用) |
 
 ### vector_polar_t 结构
 
 ```c
 typedef struct {
-    float distance_mm;  // 距离(毫米)
-    float angle_deg;    // 角度(度), 0°正前方, 顺时针递增
+    float distance;   // 距离(mm), 0 表示无效点
+    float angle;      // 角度(°), 0°正前方, 顺时针递增
 } vector_polar_t;
 ```
+
+### 降采样算法 (lidar_task.c)
+
+360 个原始点 → `LIDAR_SECTORS` (60) 个扇区, 每扇区 6 个原始点, 取最小值加权平均:
+
+```c
+Q_POLAR_DEPTH = LIDAR_SECTORS + FLAME_SENSOR_COUNT  // 60 + 5 = 65
+LIDAR_MIN_WEIGHT = 1                                // 最小值额外权重
+```
+
+加权公式: `sector_out = (Σ valid_points + MIN_WEIGHT × d_min) / (valid_pts + MIN_WEIGHT)`
+
+提高了对近距障碍物的敏感性, 无效点 (distance=0) 不计入。
+
+### 几何标定 (ld14p_calibrate)
+
+激光器偏离旋转中心的几何修正 (参照官方 SDK), 当前在 lidar_task.c 中已注释:
+
+```c
+// ld14p_calibrate(cloud_copy, LD14P_POINTS_PER_REV, 5.9f, -18.975571f);
+```
+
+需要 PCB 完成后再评估是否需要启用。当前 PCB 雷达方向与实际行进方向相反 (见 TODO.md), 可能需要额外软件修正。
 
 ## 四、实测协议细节
 
@@ -188,7 +221,7 @@ ESP_LOGI(TAG, "RAW: %02x %02x %02x ...", buf[0], buf[1], buf[2], ...);
 错误地址 `0x3c02xxxx`（PSRAM区域）。
 
 **原因**：`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y` 导致任务栈在PSRAM，
-大局部变量（`scan_buf[360]` = 2880字节）触发了缓存错误。
+大局部变量（`cloud_copy[360]` = 2880字节）触发了缓存错误。
 
 **解决**：在 `sdkconfig.defaults` 中添加：
 ```
@@ -216,13 +249,10 @@ CONFIG_FREERTOS_USE_TICKLESS_IDLE=n
 **现象**：`Guru Meditation Error (LoadProhibited)`，寄存器中出现 `0xa5a5a5a5`（FreeRTOS栈标记）。
 多核时可能报在Core 1而非Core 0。
 
-**原因**：`scan_buf[360]` = 2880字节，加上函数调用链，超出栈空间。
+**原因**：`cloud_copy[360]` 临时数组 (2880 字节) 加上函数调用链, 超出栈空间。
 
-**解决**：
-```c
-// main.c: 增大传感器任务栈
-xTaskCreate(ld14p_sensor_task, "ld14p_sensor", 8192, /* 4096→8192 words */ ...);
-```
+**解决**：lidar_task 已分配 8192 words 栈空间, 足够容纳 cloud_copy[360] 临时快照。
+若仍有溢出, 可改用 `DRAM_ATTR` 静态缓冲区。
 
 ### 7.5 uart_read_bytes 带超时崩溃
 
@@ -231,17 +261,15 @@ xTaskCreate(ld14p_sensor_task, "ld14p_sensor", 8192, /* 4096→8192 words */ ...
 **原因**：`uart_driver_install(port, rx_buf, 0, 0, NULL, 0)` 中事件队列为NULL，
 调用 `uart_read_bytes()` 带 `timeout>0` 时内部试图访问不存在的通知对象。
 
-**解决**：
-- 使用 `uart_read_bytes(..., 0)`（非阻塞），配合 `vTaskDelay` 让步
-- 或安装时传入有效事件队列句柄
+**解决**：本驱动使用 `uart_read_bytes(..., 0)` (非阻塞), 上层使用 `vTaskDelay(2)` 让步。
 
 ### 7.6 串口TX缓冲溢出
 
 **现象**：`E uart: uart_write_bytes(1629): uart driver error`。
 
-**原因**：logger任务单次写入2883字节到UART0，但TX缓冲不足。
+**原因**：WebSocket JSON 序列化输出较大 (~2.5KB/帧), UART0 TX 缓冲不足。
 
-**解决**：不致命，数据仍能传输；或增大UART0 TX缓冲大小。
+**解决**：不致命，数据仍能传输；或增大 UART0 TX 缓冲大小。
 
 ### 7.7 无UART数据
 
@@ -258,7 +286,7 @@ xTaskCreate(ld14p_sensor_task, "ld14p_sensor", 8192, /* 4096→8192 words */ ...
 
 **现象**：发送0xA2命令后LD14P停止发送数据。
 
-**排查**：先不发送命令（注释掉 `ld14p_set_freq` 调用），看默认6Hz数据是否正常。
+**排查**：先不发送命令（注释掉 `send_freq_command` 调用），看默认6Hz数据是否正常。
 如果默认6Hz正常、发命令后异常，可能是波特率不匹配导致命令内容被LD14P误解释。
 
 ---
