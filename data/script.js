@@ -1,7 +1,8 @@
 const CONFIG = {
     MAX_DISTANCE_MM: 5000,
-    DANGER_DISTANCE_MM: 800,
     SAFE_DISTANCE_MM: 4000,
+    DANGER_DISTANCE_MM: 800,
+    PERCEPTION_MIN: 100,
     GRID_STEPS: [1000, 2000, 3000, 4000],
     C: {
         grid: '#3c3c5c58',
@@ -12,7 +13,7 @@ const CONFIG = {
         safeLine: 'rgba(68,255,68,0.30)',
         pointDanger: '#ff4444',
         pointSafe: '#44ff44',
-        pointNoise: '#00d4ff'
+        pointNoise: '#888888'
     }
 };
 
@@ -29,6 +30,7 @@ function hexToRgba(hex, a) {
 }
 
 function getColor(d) {
+    if (d < CONFIG.PERCEPTION_MIN)        return CONFIG.C.pointNoise;
     if (d <= CONFIG.DANGER_DISTANCE_MM) return CONFIG.C.pointDanger;
     if (d <= CONFIG.SAFE_DISTANCE_MM)    return CONFIG.C.pointSafe;
     return CONFIG.C.pointNoise;
@@ -263,9 +265,14 @@ function handle(data) {
     for (let i = 0; i < raw.length; i++) {
         const d = raw[i].d;
         if (d <= 0 || isNaN(d) || d > CONFIG.MAX_DISTANCE_MM) { noise++; continue; }
+        if (d < CONFIG.PERCEPTION_MIN || d > CONFIG.SAFE_DISTANCE_MM) {
+            noise++;
+        } else if (d <= CONFIG.DANGER_DISTANCE_MM) {
+            danger++;
+        } else {
+            safe++;
+        }
         filtered.push(raw[i]);
-        if (d <= CONFIG.DANGER_DISTANCE_MM) danger++;
-        else safe++;
     }
     radarData = filtered;
     els.statNoise.textContent = noise;

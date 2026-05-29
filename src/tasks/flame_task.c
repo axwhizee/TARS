@@ -48,9 +48,9 @@ void flame_task(void *pvParameters) {
         if (!(xEventGroupGetBits(eg_sync) & BIT_FLAME_Q_READY)) {
             vector_polar_t data[FLAME_SENSOR_COUNT];
             for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {
-                data[i].angle_deg = flame_sensors[i].angle_deg;
+                data[i].angle = flame_sensors[i].angle_deg;
                 bool flame_detected = (gpio_get_level(flame_sensors[i].gpio) == 0);
-                data[i].distance_mm = flame_detected ? FLAME_DETECT_MM : 0.0f;
+                data[i].distance = flame_detected ? FLAME_DETECT_MM : 0.0f;
             }
 
             for (int i = 0; i < FLAME_SENSOR_COUNT; i++) {

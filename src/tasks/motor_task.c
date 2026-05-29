@@ -1,11 +1,15 @@
 /**
  * @file motor_task.c
- * @brief 电机控制任务: EMA 平滑 + 三态差速转换 + 换向死区
+ * @brief 电机控制任务: EMA 平滑 → 分类 → PWM → 换向死区
  *
- * 三态决策 (基于 EMA 滤波后的 cmd):
- *   1. 死区: |x|=|y|≈0      → 停车 (M_IDLE)
- *   2. 差速: 正常行驶/后退   → lin ± ang
- *   3. 原地转向: x<0 且侧向力主导 → 清零前进分量, 纯差速旋转
+ * 架构: motor_classify() 分离判定, motor_apply() 独立计算 PWM.
+ *
+ * 判定优先级 (从上到下):
+ *   1. M_DEAD   | |x|<50 且 |y|<50                | L=R=2
+ *   2. M_SPIN_L | |y| > 2*|x| (垂向主导)         | ang × 0.5 纯旋转
+ *   3. M_SPIN   | -MAX/2 < x < 0 (弱后退)        | ang × 1.0 纯旋转
+ *   4. M_REV    | -MAX < x < -MAX/2 (强后退)     | 反向 ang + 速度减半
+ *   5. M_FWD    | 其余                            | L=lin-ang, R=lin+ang
  */
 #include "tasks/motor_task.h"
 #include "drivers/drv8833.h"
@@ -50,29 +54,87 @@ static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) 
     ema->dy = fmaxf(-MOTOR_MAX_MM, fminf(MOTOR_MAX_MM, alpha * ema->target_y + alpha_inv * ema->dy));
 }
 
-// 简化版状态枚举（仅用于换向检测）
-typedef enum { M_IDLE, M_FWD, M_REV } motor_dir_t;
+// 运动模式枚举
+typedef enum {
+    M_DEAD,     // 死区: |x|≈|y|≈0 → 怠速
+    M_SPIN_L,   // 垂向主导 原地旋转 (灵敏度×0.5)
+    M_SPIN,     // 弱后退 原地旋转 (正常灵敏度)
+    M_FWD,      // 前进差速
+    M_REV,      // 后退差速 |x|≥3m
+} motor_mode_t;
 
-/**
- * @brief 滤波后 cmd → 差速占空比 (三态决策)
- * @return 当前运动方向 (用于换向死区判断)
- */
-static inline motor_dir_t motor_cmd_to_duty(const motor_ema_t *ema, int8_t *l, int8_t *r) {
-    float x = ema->dx, y = ema->dy;
+// ─── 状态分类: 直接用原始力 (x, y) 判定 ──────────────────────
+static inline motor_mode_t motor_classify(float x, float y) {
+    if (fabsf(x) < MOTOR_DEADZONE_MM && fabsf(y) < MOTOR_DEADZONE_MM)
+        return M_DEAD;
 
-    // --- 态 1: 死区 ---
-    if (fabsf(x) < MOTOR_DEADZONE_MM && fabsf(y) < MOTOR_DEADZONE_MM) {
-        *l = *r = 10;   // 低速前进避免停滞
-        return M_IDLE;
+    // |y| > 2|x| → 垂向主导, 低灵敏度旋转
+    if (fabsf(y) > fabsf(x) * 2.0f)
+        return M_SPIN_L;
+
+    // 后退: |x|<3m → 正常旋转, |x|≥3m → 差速倒车
+    if (x < 0.0f)
+        return (fabsf(x) >= MOTOR_MAX_MM * 0.5f) ? M_REV : M_SPIN;
+
+    return M_FWD;
+}
+
+// ─── 原地旋转: L=-ang, R=+ang, sensitivity 控制灵敏度 ──────────
+static inline void motor_spin(float y, float sensitivity) {
+    float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO * sensitivity;
+    ang = fmaxf(-1.0f, fminf(1.0f, ang));
+    int8_t l = (int8_t)roundf(-ang * 100.0f);
+    int8_t r = (int8_t)roundf( ang * 100.0f);
+    motor_set(l, r);
+}
+
+// ─── 差速计算 + PWM 输出 ───────────────────────────────────────
+static inline void motor_apply(motor_mode_t mode, float x, float y) {
+    float lin, ang, left = 0.0f, right = 0.0f, m;
+    int8_t l, r;
+
+    switch (mode) {
+    case M_DEAD:
+        motor_set(2, 2);
+        return;
+
+    case M_SPIN_L:  motor_spin(y, 1.0f);  return;   // 垂向主导
+    case M_SPIN:    motor_spin(y, 1.0f);  return;   // 弱后退
+
+    case M_FWD:
+        lin = x / MOTOR_MAX_MM;
+        ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
+        left  = lin - ang;
+        right = lin + ang;
+        break;
+
+    case M_REV:
+        lin = fabsf(x) / MOTOR_MAX_MM * 0.5f;
+        ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO * 2.0f;
+        ang = -ang;
+        left  = -lin - ang;
+        right = -lin + ang;
+        break;
     }
 
-    // cmd → [-1, 1]: 除以 MOTOR_MAX_MM 等效于除以 60 → duty%
+    m = fmaxf(fabsf(left), fabsf(right));
+    if (m > 1.0f) { left /= m; right /= m; }
+    l = (int8_t)roundf(left  * 100.0f);
+    r = (int8_t)roundf(right * 100.0f);
+    motor_set(l, r);
+}
+
+// ─── 统一公式差速 (动态转向增益, lateral 感知) ─────────────────
+static inline void motor_apply_simple(float x, float y) {
     float lin = x / MOTOR_MAX_MM;
     float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
 
-    // --- 态 3: 原地转向 (x<0 且侧向力主导时清零前进分量) ---
-    if (x < 0 && fabsf(ang) > fabsf(lin) * 2.0f) {
-        lin = 0;
+    // 动态转向: dx↓→转向↑, dy↓→走廊中保持直行
+    // 走廊(dy≈0,dx大): boost≈1.15→不转  靠墙(dy有明显值): boost逐增
+    ang *= 1.0f + (fabsf(ang) + 0.12f) / (fabsf(lin) + 0.10f);
+    if (lin < 0.0f) {
+        ang += copysignf(0.08f, y);   // 对称破缺偏置
+        lin *= 0.4f;                  // 后退减速
     }
 
     float left  = lin - ang;
@@ -82,55 +144,56 @@ static inline motor_dir_t motor_cmd_to_duty(const motor_ema_t *ema, int8_t *l, i
     float m = fmaxf(fabsf(left), fabsf(right));
     if (m > 1.0f) { left /= m; right /= m; }
 
-    *l = (int8_t)roundf(left  * 100.0f) / 2;    // 减慢后退速度
-    *r = (int8_t)roundf(right * 100.0f);
+    // 死区怠速
+    if (fabsf(left) * 100.0f < 3.0f && fabsf(right) * 100.0f < 3.0f) {
+        motor_set(2, 2);
+        return;
+    }
 
-    // 态 2: 正常差速 (x>0 前进, x<0 后退 — 公式自动处理 reversed steering)
-    return (x > 0) ? M_FWD : M_REV;
+    int8_t l = (int8_t)roundf(left  * 100.0f);
+    int8_t r = (int8_t)roundf(right * 100.0f);
+    motor_set(l, r);
 }
 
-// 换向检测工具函数
-static inline bool motor_is_reversal(motor_dir_t prev, motor_dir_t curr) {
-    return (prev != M_IDLE && curr != M_IDLE && prev != curr);
+// ─── 换向制动: 仅 FWD↔REV 触发, SPIN/DEAD 不干涉 ─────────────
+static inline bool motor_needs_brake(motor_mode_t prev, motor_mode_t curr) {
+    if (prev == M_FWD && curr == M_REV) return true;
+    if (prev == M_REV && curr == M_FWD) return true;
+    return false;
 }
 
+// ─── 任务入口 ───────────────────────────────────────────────────
 void motor_task(void *pvParameters) {
     (void)pvParameters;
     
     const TickType_t period = pdMS_TO_TICKS(1000 / MOTOR_FREQ_HZ);
     TickType_t last_wake = xTaskGetTickCount();
-    motor_ema_t ema = {0};          // EMA状态清零
-    motor_dir_t prev_dir = M_IDLE;  // 上一周期方向
+    motor_ema_t ema = {0};
+    // motor_mode_t prev_mode = M_DEAD;  // 状态机保留
     ESP_LOGI(TAG, "Motor task started @ %dHz, alpha=%.2f (τ=%dms)",
         MOTOR_FREQ_HZ, (float)MOTOR_EMA_ALPHA, MOTOR_EMA_TAU_MS);
     
     while (1) {
-        vTaskDelayUntil(&last_wake, period);    // 任务周期性运行
-        
-        // 非阻塞获取指令
+        vTaskDelayUntil(&last_wake, period);
+
         vector_cart_t cmd;
         const vector_cart_t *pcmd = (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) ? &cmd : NULL;
-        
-        // EMA滤波 (含超时归零)
         motor_ema_update(pcmd, &ema);
-        
-        // 笛卡尔→差速PWM (三态决策)
-        int8_t l_duty, r_duty;
-        motor_dir_t curr_dir = motor_cmd_to_duty(&ema, &l_duty, &r_duty);
-        
-        // 换向死区保护 (仅方向反转时制动)
-        if (motor_is_reversal(prev_dir, curr_dir)) {
-            motor_brake();
-            vTaskDelay(pdMS_TO_TICKS(MOTOR_DEADTIME_MS));
-        }
-        
-        // 输出PWM
-        motor_set(l_duty, r_duty);
-        
-        // 更新状态 (调试日志按需开启)
+
+        // --- 统一公式 (测试中) ---
+        motor_apply_simple(ema.dx, ema.dy);
+
+        // --- 状态机 (保留) ---
+        // motor_mode_t mode = motor_classify(ema.dx, ema.dy);
+        // if (motor_needs_brake(prev_mode, mode)) {
+        //     motor_brake();
+        //     vTaskDelay(pdMS_TO_TICKS(MOTOR_DEADTIME_MS));
+        // }
+        // motor_apply(mode, ema.dx, ema.dy);
+        // prev_mode = mode;
+
         #ifdef DEBUG
-        ESP_LOGD(TAG, "PWM L:%+d R:%+d | dir:%d", l_duty, r_duty, curr_dir);
+        ESP_LOGD(TAG, "x=%.0f y=%.0f", ema.dx, ema.dy);
         #endif
-        prev_dir = curr_dir;
     }
 }

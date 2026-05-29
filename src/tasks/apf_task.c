@@ -4,7 +4,7 @@
  *
  * 核心公式 (2D APF):
  *   斥力:  F_rep = -K_rep * w(ra) / ra² * û(θ)
- *          û = (cosθ, sinθ),  w(ra) = { danger_wt, ra ≤ 1m; safe_wt, 1m < ra ≤ 6m }
+ *          û = (cosθ, sinθ),  w(ra) = { danger_wt, ra ≤ 800mm; 1.0, 800 < ra ≤ 4000mm }
  *   引力:  F_att = (K_att, 0)
  *   合力:  F_total = F_att + Σ F_rep
  *   单位:  距离 mm, 合力无量纲 (电机任务归一化后转为占空比)
@@ -81,7 +81,7 @@ void apf_task(void *pvParameters) {
         rfy = 0.0f;
 
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-            float range = samples[i].distance_mm;   // 距离 (mm), 用于分类和权重
+            float range = samples[i].distance;   // 距离 (mm), 用于分类和权重
 
             if (range < APF_PERCEPTION_MIN || range > APF_SAFE_RANGE) {
                 n_noise++;      // 噪声/死区, 跳过不计
@@ -92,9 +92,9 @@ void apf_task(void *pvParameters) {
                 n_safe++;       // 感知区
             }
 
-            float rad   = samples[i].angle_deg * (M_PI / 180.0f);   // ° → rad
+            float rad   = samples[i].angle * (M_PI / 180.0f);   // ° → rad
             float ra    = range * 0.001f;   // mm → m, 防止 ra² 溢出
-            float ra_sq = ra * ra;
+            float ra_sq = ra * ra;  // 临时改为三次
             // F_rep = -K_rep * w(range) / ra² * û(θ) , û = (cosθ, sinθ)
             float f_rep = APF_REPULSE_GAIN * repulse_weight(range) / ra_sq;
             rfx -= f_rep * cosf(rad);   // x 分量 (负号: 力背离障碍物)

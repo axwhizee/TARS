@@ -41,7 +41,7 @@ static const vector_polar_t *lidar_process(
         int valid_pts = 0;  // 区间内有效点
 
         for (int j = base; j < end; j++) {
-            float d = raw[j].distance_mm;
+            float d = raw[j].distance;
             if (d <= 0.0f) continue;    // 无效点跳过
             if (d < 6000.0f) *valid_out += 1;   // 统计有效感知区点数
             sum += d;
@@ -50,13 +50,13 @@ static const vector_polar_t *lidar_process(
         }
 
         if (valid_pts == 0) {
-            sectors[s].distance_mm = 0;     // 采样后无效点标记
+            sectors[s].distance = 0;     // 采样后无效点标记
             continue;
         }
 
-        sectors[s].angle_deg = (float)(base + end) / 2.0f;
+        sectors[s].angle = (float)(base + end) / 2.0f;
         sum += LIDAR_MIN_WEIGHT * d_min;    // 最小值加权, 增强近距敏感性
-        sectors[s].distance_mm = sum / (LIDAR_MIN_WEIGHT + valid_pts);
+        sectors[s].distance = sum / (LIDAR_MIN_WEIGHT + valid_pts);
     }
 
     return sectors;

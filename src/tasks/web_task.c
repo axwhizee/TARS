@@ -241,7 +241,7 @@ void web_task(void *pvParameters) {
             if (pos >= (int)sizeof(json_buf) - 40) break;
             pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
                 "{\"a\":%.2f,\"d\":%.2f}%s",
-                vectors[i].angle_deg, vectors[i].distance_mm,
+                vectors[i].angle, vectors[i].distance,
                 (i < Q_POLAR_DEPTH - 1) ? "," : "");
         }
 

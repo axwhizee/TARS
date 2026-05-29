@@ -112,8 +112,8 @@ const vector_polar_t *ld14p_collect(const ld14p_frame_t *frm) {
         int deg = (raw_angle / ANGLE_RES) % LD14P_POINTS_PER_REV;
         float angle_f = (float)raw_angle / ANGLE_RES;
 
-        cloud_360[deg].angle_deg = angle_f;
-        cloud_360[deg].distance_mm = (float)frm->points[i].distance;
+        cloud_360[deg].angle = angle_f;
+        cloud_360[deg].distance = (float)frm->points[i].distance;
         if (i == LD14P_POINTS_PER_PACK - 1) last_deg = angle_f;
     }
 
@@ -145,8 +145,8 @@ void ld14p_calibrate(vector_polar_t *points, float offset_x, float offset_y) {
     static float last_shift = 0.0f;
 
     for (uint16_t i = 0; i < LD14P_POINTS_PER_REV; i++) {
-        float dist = points[i].distance_mm;
-        float angle = points[i].angle_deg;
+        float dist = points[i].distance;
+        float angle = points[i].angle;
         float shift;
 
         if (dist > 0.0f) {
@@ -162,7 +162,7 @@ void ld14p_calibrate(vector_polar_t *points, float offset_x, float offset_y) {
         // 归一化到 [0, 360)
         if (angle > 360.0f) angle -= 360.0f;
         if (angle < 0.0f)   angle += 360.0f;
-        points[i].angle_deg = angle;
+        points[i].angle = angle;
     }
 }
 
