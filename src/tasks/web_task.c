@@ -136,7 +136,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     while (1) {
         esp_err_t ret = httpd_ws_recv_frame(req, &pkt, sizeof(buf));
         if (ret != ESP_OK) {
-            if (++errs > 10) break;              // 连续10次失败则真断开
+            if (++errs > 16) break;     // 连续10次失败则真断开
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }

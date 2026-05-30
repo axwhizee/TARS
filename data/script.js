@@ -126,8 +126,8 @@ function drawDirection() {
     const ex = cx + nx, ey = cy + ny;
     const g = ctx.createLinearGradient(cx, cy, ex, ey);
     g.addColorStop(0, 'transparent');
-    g.addColorStop(0.7, 'rgba(0, 200, 255, 0.25)');
-    g.addColorStop(1, 'rgba(0, 200, 255, 0.74)');
+    g.addColorStop(0.7, 'rgba(0, 60, 80, 0.25)');
+    g.addColorStop(1, 'rgba(255, 70, 0, 0.8)');
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(ex, ey);

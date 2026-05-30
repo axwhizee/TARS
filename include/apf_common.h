@@ -122,7 +122,7 @@ DS18B20_PIN         9   // TEMP-DQ
 #define APF_PERCEPTION_MIN  100.0f      // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
 #define APF_ATTRACT_GAIN    4000.0f     // 引力增益 (K_att)，目前仅用于产生前向行进引力，影响小车的速度
 // #define APF_REPULSE_GAIN    APF_ATTRACT_GAIN * APF_DANGER_RANGE / 14  // 斥力增益 (K_rep)
-#define APF_REPULSE_GAIN    40.0f       // 斥力增益 (K_rep)，目前影响制动距离
+#define APF_REPULSE_GAIN    50.0f       // 斥力增益 (K_rep)，目前影响制动距离
 #define APF_DANGER_RE_WT    1.2f        // 危险区斥力权重倍率
 #define APF_SAFE_RE_WT      0.8f        // 感知区斥力权重倍率
 #define APF_OPEN_GAIN       (APF_ATTRACT_GAIN * 0.3f)  // 开阔方向引力 (补充前向力)

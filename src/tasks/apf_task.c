@@ -40,9 +40,9 @@ void apf_task(void *pvParameters) {
     const TickType_t period = pdMS_TO_TICKS(1000 / SENSOR_FREQ + 10);    // 等待周期（+10ms 余量）
     vector_polar_t  samples[Q_POLAR_DEPTH];
     vector_polar_t  tmp;
-    vector_cart_t   cmd;                     // 合力指令输出 (→ q_cart → motor_task)
-    float rfx, rfy;                          // 斥力分量累计
-    int n_danger, n_safe, n_noise;           // 各区间点数统计
+    vector_cart_t   cmd;            // 合力指令输出 (→ q_cart → motor_task)
+    float rfx, rfy;                 // 斥力分量累计
+    int n_danger, n_safe, n_noise;  // 各区间点数统计
 
     ESP_LOGI(TAG, "APF task started: K_att=%.0f K_rep=%.0f danger<%.0fmm safe<%.0fmm",
         APF_ATTRACT_GAIN, APF_REPULSE_GAIN, APF_DANGER_RANGE, APF_SAFE_RANGE);

@@ -171,10 +171,6 @@ pio run -t upload -t uploadfs -t monitor
 
 > 烧录波特率 921600，监视器波特率 115200（见 `platformio.ini`）。
 
-### DEBUG 模式
-
-在 `apf_common.h` 中取消注释 `#define DEBUG`（或通过 `build_flags = -D DEBUG`），系统将跳过所有传感器与控制任务，仅执行电机 ramp 测试序列。生产运行时务必禁用。当前 DEBUG 定义位于 `src/main.c` 中，优先级最高。
-
 ## SDK 关键配置 (`sdkconfig.defaults`)
 
 | 配置项 | 值 | 说明 |
@@ -195,7 +191,7 @@ pio run -t upload -t uploadfs -t monitor
 
 ## 关键设计决策
 
-- **双频率解耦**: APF 势场解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ 可调, 默认 25ms) 消除帧间抖动
+- **双频率解耦**: APF 势场解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ 可调, 默认 50ms, 见 `MOTOR_EMA_TAU_MS`) 消除帧间抖动
 - **无锁同步**: FreeRTOS 事件组 + 队列完成所有任务间通信, 无共享内存竞争
 - **极坐标统一**: LiDAR 60 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, APF 算法输入为 65 维齐次向量
 - **拆分斥力剖面**: x 分量使用 1/r² 控制后退时机, y 分量使用 1/r 使转向力分布更均匀, 避免近距爆发
