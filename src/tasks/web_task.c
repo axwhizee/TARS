@@ -1,15 +1,12 @@
 /**
  * @file web_task.c
- * @brief Web 服务与日志上传 — HTTP 静态文件 (SPIFFS) + WebSocket JSON 推送
+ * @brief Web 服务 — 内存直出静态文件 + WebSocket JSON 推送
  *
- * 初始化时注册 4 个 HTTP 处理器:
- *   GET /            → SPIFFS index.html
- *   GET /style.css   → SPIFFS style.css
- *   GET /script.js   → SPIFFS script.js
- *   GET /ws          → WebSocket 升级 → JSON 传感器日志推送
- *
- * 主循环阻塞等待 BIT_LOG_Q_READY, 读取 q_log + q_temp 后构建 JSON
- * 并通过 httpd 异步 API 推送到所有已连接的 WebSocket 客户端.
+ * 初始化流程:
+ *   0. preload_static_files() — SPIFFS → PSRAM (一次性)
+ *   1. httpd_start(port 80, max_open_sockets=16)
+ *   2. 注册 3 个静态文件 URI + 1 个 WebSocket URI
+ *   3. 主循环: BIT_LOG_Q_READY → JSON → 广播到全部 WS 客户端
  */
 #include "tasks/web_task.h"
 #include "apf_common.h"
@@ -25,8 +22,10 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <errno.h>
 
-#define WS_MAX_CLIENTS 4
+#define WS_MAX_CLIENTS  4
+#define HTTPD_MAX_FDS   16
 
 static const char *TAG = "WEB_TASK ";
 
@@ -35,6 +34,36 @@ static httpd_handle_t ws_server = NULL;
 static int            ws_fds[WS_MAX_CLIENTS];
 static int            ws_count = 0;
 static SemaphoreHandle_t ws_mutex = NULL;
+
+// 预加载静态文件 (启动时从SPIFFS读取一次, 后续直接内存服务, 消灭fopen争用)
+typedef struct {
+    const char *uri;
+    const char *mime;
+    uint8_t    *data;
+    size_t      len;
+} static_file_t;
+
+static static_file_t s_files[3];
+
+static void preload_static_files(void) {
+    const char *paths[] = {"/index.html", "/style.css", "/script.js"};
+    const char *mimes[] = {"text/html", "text/css", "application/javascript"};
+    for (int i = 0; i < 3; i++) {
+        char sp[64];
+        snprintf(sp, sizeof(sp), "/spiffs%s", paths[i]);
+        FILE *f = fopen(sp, "r");
+        if (!f) { ESP_LOGW(TAG, "Preload MISSING: %s", sp); continue; }
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        uint8_t *buf = malloc(sz);
+        if (buf && fread(buf, 1, sz, f) == (size_t)sz) {
+            s_files[i] = (static_file_t){paths[i], mimes[i], buf, (size_t)sz};
+            ESP_LOGI(TAG, "Preloaded %s (%ld bytes)", paths[i], sz);
+        }
+        fclose(f);
+    }
+}
 
 // WebSocket 客户端集合 (互斥保护)
 static void ws_add_client(int fd) {
@@ -80,47 +109,22 @@ static void ws_send_all(const char *data, size_t len) {
     xSemaphoreGive(ws_mutex);
 }
 
-// MIME 类型推断
-static const char *get_mime(const char *path) {
-    if (strstr(path, ".html")) return "text/html";
-    if (strstr(path, ".css"))  return "text/css";
-    if (strstr(path, ".js"))   return "application/javascript";
-    return "text/plain";
-}
-
-// HTTP GET 静态文件处理器 (从 SPIFFS 分块发送)
+// HTTP GET 静态文件处理器 (内存直出, 无SPIFFS FILE*争用)
 static esp_err_t file_get_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "HTTP GET %s", req->uri);
+    const char *uri = req->uri;
+    if (strcmp(uri, "/") == 0) uri = "/index.html";
 
-    // URI → SPIFFS 路径
-    char filepath[640];
-    if (strcmp(req->uri, "/") == 0)
-        strcpy(filepath, "/spiffs/index.html");
-    else {
-        int n = snprintf(filepath, sizeof(filepath), "/spiffs%s", req->uri);
-        if (n < 0 || (size_t)n >= sizeof(filepath)) {
-            httpd_resp_send_500(req);
-            return ESP_FAIL;
+    for (int i = 0; i < 3; i++) {
+        if (s_files[i].data && strcmp(s_files[i].uri, uri) == 0) {
+            httpd_resp_set_type(req, s_files[i].mime);
+            httpd_resp_set_hdr(req, "Connection", "close");
+            httpd_resp_send(req, (const char *)s_files[i].data, (ssize_t)s_files[i].len);
+            return ESP_OK;
         }
     }
-
-    FILE *f = fopen(filepath, "r");
-    if (!f) {
-        ESP_LOGW(TAG, "File not found: %s", filepath);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "Serving %s (%s)", filepath, get_mime(filepath));
-    httpd_resp_set_type(req, get_mime(filepath));
-
-    char buf[512];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
-        httpd_resp_send_chunk(req, buf, n);
-    httpd_resp_send_chunk(req, NULL, 0);   // 结束分块传输
-    fclose(f);
-    return ESP_OK;
+    ESP_LOGW(TAG, "404: %s", req->uri);
+    httpd_resp_send_404(req);
+    return ESP_FAIL;
 }
 
 // WebSocket 处理：阻塞等待客户端关闭或错误, 自动回复 PING → PONG 保持连接
@@ -136,8 +140,14 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     while (1) {
         esp_err_t ret = httpd_ws_recv_frame(req, &pkt, sizeof(buf));
         if (ret != ESP_OK) {
-            if (++errs > 16) break;     // 连续10次失败则真断开
-            vTaskDelay(pdMS_TO_TICKS(50));
+            // EAGAIN/EWOULDBLOCK 是接收端WS正常超时（客户端不发数据只收）
+            // 不累计错误，避免误踢空闲客户端
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+            if (++errs > 32) break;
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
         errs = 0;
@@ -157,12 +167,16 @@ void web_task(void *pvParameters) {
     (void)pvParameters;
     ws_mutex = xSemaphoreCreateMutex();
 
-    // 0. 启动 HTTP 服务器 (port 80, LRU 清理僵尸连接)
+    // 0. 启动前预加载静态文件 (一次 SPIFFS 读取, 后续内存直出)
+    preload_static_files();
+
+    // 1. 启动 HTTP 服务器
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.server_port       = WEBSOCKET_PORT;
-    cfg.lru_purge_enable  = true;
-    cfg.recv_wait_timeout = 2;
-    cfg.send_wait_timeout = 2;
+    cfg.server_port        = WEBSOCKET_PORT;
+    cfg.max_open_sockets   = HTTPD_MAX_FDS;
+    cfg.lru_purge_enable   = true;
+    cfg.recv_wait_timeout  = 2;
+    cfg.send_wait_timeout  = 2;
 
     if (httpd_start(&ws_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server start failed");
@@ -170,7 +184,7 @@ void web_task(void *pvParameters) {
         return;
     }
 
-    // 1. 注册静态文件 URI (非 WebSocket, 匹配普通 HTTP GET)
+    // 2. 注册静态文件 URI (非 WebSocket, 匹配普通 HTTP GET)
     httpd_uri_t file_uris[] = {
         {.uri = "/",          .method = HTTP_GET, .handler = file_get_handler},
         {.uri = "/style.css", .method = HTTP_GET, .handler = file_get_handler},
@@ -179,7 +193,7 @@ void web_task(void *pvParameters) {
     for (int i = 0; i < sizeof(file_uris) / sizeof(file_uris[0]); i++)
         httpd_register_uri_handler(ws_server, &file_uris[i]);
 
-    // 2. 注册 WebSocket URI (仅匹配 Upgrade: websocket 请求)
+    // 3. 注册 WebSocket URI (仅匹配 Upgrade: websocket 请求)
     httpd_uri_t ws_uri = {
         .uri          = "/ws",
         .method       = HTTP_GET,
@@ -189,16 +203,6 @@ void web_task(void *pvParameters) {
     httpd_register_uri_handler(ws_server, &ws_uri);
 
     ESP_LOGI(TAG, "HTTP + WebSocket server on port %d", WEBSOCKET_PORT);
-
-    // 3. 验证 SPIFFS 文件就绪
-    const char *check_files[] = {
-        "/spiffs/index.html", "/spiffs/script.js", "/spiffs/style.css"
-    };
-    for (int i = 0; i < 3; i++) {
-        FILE *f = fopen(check_files[i], "r");
-        if (f) { fclose(f); ESP_LOGI(TAG, "SPIFFS: %s OK", check_files[i]); }
-        else    ESP_LOGW(TAG, "SPIFFS: %s MISSING — run uploadfs", check_files[i]);
-    }
 
     // 4. 数据推送主循环 — 每轮等待 APF 产出新一帧日志
     char json_buf[3600];

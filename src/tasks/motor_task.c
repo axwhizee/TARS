@@ -54,17 +54,24 @@ static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) 
     ema->dy = fmaxf(-MOTOR_MAX_MM, fminf(MOTOR_MAX_MM, alpha * ema->target_y + alpha_inv * ema->dy));
 }
 
-// 统一公式差速 (动态转向增益, lateral 感知)
+// 统一公式差速 (动态转向系数)
 static inline void motor_apply_simple(float x, float y) {
     float lin = x / MOTOR_MAX_MM;
     float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
 
-    // 动态转向: dx↓→转向↑, dy↓→走廊中保持直行
-    // 走廊(dy≈0,dx大): boost≈1.15→不转  靠墙(dy有明显值): boost逐增
-    ang *= 1.0f + (fabsf(ang) + 0.12f) / (fabsf(lin) + 0.10f);
+    /**
+     * 动态转向增益：
+     * 与 lin 正相关，高速行进时转向更灵敏
+     * 与 ang 负相关，防止急转时转向过度
+     */
+    float gain = MOTOR_TURN_GAIN_MI +
+        MOTOR_TURN_GAIN_MX * fabsf(lin) * (1.0f - fabsf(ang));
+    ang *= gain;
     if (lin < 0.0f) {
-        ang += copysignf(0.1f, y);   // 对称破缺偏置
-        lin *= 0.4f;                  // 后退减速
+        if (lin < -0.3f) {
+            ang += copysignf(0.1f, y);  // 对称破缺偏置
+        }
+        lin *= 0.4f;
     }
 
     float left  = lin - ang;

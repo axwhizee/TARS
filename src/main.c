@@ -3,18 +3,20 @@
  * @brief 主入口 — 系统初始化 → 硬件驱动 → RTOS 通信对象 → 任务创建
  *
  * 启动流程:
- *   app_main() ->
- *     1. sys_nvs_init()       — NVS flash 存储
- *     2. sys_spiffs_init()    — SPIFFS 挂载 (网页文件)
- *     3. sys_wifi_init()      — Wi-Fi AP 启动 (192.168.1.1:80)
- *     4. 硬件驱动初始化        — LD14P, DRV8833, DS18B20, Flame
- *     5. 队列 + 事件组创建     — RTOS IPC 基础设施
- *     6. xTaskCreate ×7       — 传感器/控制/Web 任务
+ *   1. sys_nvs_init()       — NVS flash 存储
+ *   2. sys_spiffs_init()    — SPIFFS 挂载 (网页文件)
+ *   3. sys_wifi_init()      — Wi-Fi AP 启动 (192.168.1.1:80)
+ *   4. 硬件驱动初始化        — LD14P, DRV8833, DS18B20, Flame
+ *   5. 队列 + 事件组创建     — RTOS IPC 基础设施
+ *   6. xTaskCreatePinnedToCore ×7 — 双核分工
+ *
+ * 双核分配:
+ *   Core 0: WiFi + lwIP + web_task (网络专用, 不被传感器/控制打断)
+ *   Core 1: lidar, flame, temp, apf, motor, sysmon (传感器/控制专用)
  *
  * app_main() 返回后 FreeRTOS 调度器自动启动.
  * 所有单位: 距离 mm, 时间 ms, 角度 °.
  */
-#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -24,7 +26,7 @@
 #include "apf_common.h"
 #include "sys_init.h"
 #include "drivers/ld14p.h"
-#include "drivers/ds18b20.h"
+// #include "drivers/ds18b20.h"
 #include "drivers/drv8833.h"
 #include "tasks/lidar_task.h"
 #include "tasks/flame_task.h"
@@ -32,6 +34,7 @@
 #include "tasks/apf_task.h"
 #include "tasks/motor_task.h"
 #include "tasks/web_task.h"
+#include "tasks/sysmon_task.h"
 
 static const char *TAG = "MAIN";
 
@@ -42,21 +45,6 @@ QueueHandle_t        q_cart;    // APF 笛卡尔合力结果 (xQueueOverwrite, d
 QueueHandle_t        q_temp;    // DS18B20 温度数据 (depth=4)
 QueueHandle_t        q_log;     // 日志透传队列 (vector_polar_t, 供 web_task 读取)
 EventGroupHandle_t   eg_sync;   // 传感器就绪 + 日志就绪事件组
-
-/// @brief 心跳 LED (prio 1, 1Hz)
-static void vLedTask(void *pvParameters) {
-    (void)pvParameters;
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << LED_PIN),
-        .mode         = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&io_conf);
-
-    while (1) {
-        gpio_set_level(LED_PIN, !gpio_get_level(LED_PIN));
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
-}
 
 void app_main(void) {
     ESP_LOGI(TAG, "\nSystem Initializing...\n");
@@ -73,8 +61,8 @@ void app_main(void) {
     if (ld14p_init() != ESP_OK) { ESP_LOGE(TAG, "LD14P init failed"); return; }
     // 电机 PWM 驱动
     if (motor_init() != ESP_OK) { ESP_LOGE(TAG, "Motor init failed"); return; }
-    // DS18B20 温度传感器，暂时允许初始化失败
-    if (ds18b20_init() != ESP_OK) { ESP_LOGW(TAG, "DS18B20 init failed"); }
+    // DS18B20 — 已改用 ESP32-S3 内置温度传感器 (消除 1-Wire 关中断干扰)
+    // if (ds18b20_init() != ESP_OK) { ESP_LOGW(TAG, "DS18B20 init failed"); }
     // 火焰传感器 初始化
     if (flame_sensor_init() != ESP_OK) { ESP_LOGW(TAG, "Flame sensor init failed"); return; }
 
@@ -91,21 +79,19 @@ void app_main(void) {
     eg_sync = xEventGroupCreate();
     if (!eg_sync) { ESP_LOGE(TAG, "eg_sync create fail");  return; }
 
-    // 4. 创建 FreeRTOS 任务 (优先级数字越大越高)
+    // 4. 创建 FreeRTOS 任务
+    // Core 0: WiFi (固定) + lwIP (固定) + web_task
+    // Core 1: 所有传感器/控制任务
+    //  xTaskCreatePinnedToCore(func, name, stack, param, prio, handle, core)
 
     motor_set(0, 0);
-    // 心跳 LED，优先级最低
-    xTaskCreate(vLedTask,    "LedTask",    2048, NULL, 1, NULL);
-    // LIDAR 传感器任务，较复杂，依赖UART缓冲区
-    xTaskCreate(ld14p_task,  "ld14p",      8192, NULL, 5, NULL);
-    // 火焰传感器任务，简单
-    xTaskCreate(flame_task,  "flame",      2048, NULL, 7, NULL);
-    // 温度传感器任务，有时序要求
-    xTaskCreate(temp_task,   "temp",       4096, NULL, 6, NULL);
-    xTaskCreate(apf_task,    "apf",        4096, NULL, 4, NULL);
-    xTaskCreate(motor_task,  "motor",      4096, NULL, 8, NULL);
-    // 日志上传任务 (WebSocket 服务端)，低优先级，与数据流解耦
-    xTaskCreate(web_task,    "web_task",   8192, NULL, 3, NULL);
+    xTaskCreatePinnedToCore(sysmon_task,"sysmon",   4096, NULL, 1, NULL, 1);    // Core1 心跳+统计
+    xTaskCreatePinnedToCore(flame_task, "flame",    2048, NULL, 7, NULL, 1);    // Core1
+    xTaskCreatePinnedToCore(temp_task,  "temp",     4096, NULL, 6, NULL, 1);    // Core1
+    xTaskCreatePinnedToCore(ld14p_task, "ld14p",    8192, NULL, 5, NULL, 1);    // Core1
+    xTaskCreatePinnedToCore(apf_task,   "apf",      4096, NULL, 4, NULL, 1);    // Core1
+    xTaskCreatePinnedToCore(motor_task, "motor",    4096, NULL, 8, NULL, 1);    // Core1
+    xTaskCreatePinnedToCore(web_task,   "web_task", 8192, NULL, 3, NULL, 0);    // Core0 网络专用
     vTaskDelay(pdMS_TO_TICKS(1000));    // 1s 缓冲
 
     ESP_LOGI(TAG, "App_main done, scheduler starting...\n");

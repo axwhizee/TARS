@@ -36,7 +36,7 @@ esp_err_t sys_spiffs_init(void) {
     esp_vfs_spiffs_conf_t conf = {
         .base_path              = "/spiffs",
         .partition_label        = NULL,
-        .max_files              = 5,
+        .max_files              = 8,
         .format_if_mount_failed = true,
     };
     esp_err_t ret = esp_vfs_spiffs_register(&conf);

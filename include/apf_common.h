@@ -49,7 +49,7 @@ extern vector_cart_t        g_cart_cmd; // 最新 APF 合力指令 (web_task 绕
 
 // 引脚分配
 
-#define LED_PIN             48  // 开发板LED
+#define WS2812_PIN          48  // 开发板WS2812灯珠数据引脚
 #define MOTOR_AIN1_PIN      5   // AIN1
 #define MOTOR_AIN2_PIN      6   // AIN2
 #define MOTOR_BIN1_PIN      7   // BIN1
@@ -99,7 +99,7 @@ DS18B20_PIN         9   // TEMP-DQ
 
 #define LD14P_POINTS_PER_PACK   12          // 每个雷达数据帧包含的点数量
 #define LD14P_POINTS_PER_REV    360         // 雷达完整一周的点云数量
-#define LIDAR_SECTORS           60          // 降采样后的点数，请确保该值是360的因数
+#define LIDAR_SECTORS           72          // 降采样后的点数，请确保该值是360的因数
 #define LIDAR_MIN_WEIGHT        2 - 1       // 区间最小值权重，在降采样时对区间最小值会加权
 #define LD14P_UART_NUM          UART_NUM_1  // 通信串口
 #define LD14P_UART_BAUD         115200      // 波特率
@@ -122,7 +122,7 @@ DS18B20_PIN         9   // TEMP-DQ
 #define APF_PERCEPTION_MIN  100.0f      // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
 #define APF_ATTRACT_GAIN    4000.0f     // 引力增益 (K_att)，目前仅用于产生前向行进引力，影响小车的速度
 // #define APF_REPULSE_GAIN    APF_ATTRACT_GAIN * APF_DANGER_RANGE / 14  // 斥力增益 (K_rep)
-#define APF_REPULSE_GAIN    50.0f       // 斥力增益 (K_rep)，目前影响制动距离
+#define APF_REPULSE_GAIN    40.0f       // 斥力增益 (K_rep)，较高则曲线更加极端，近距离更敏感，远距离不敏感
 #define APF_DANGER_RE_WT    1.2f        // 危险区斥力权重倍率
 #define APF_SAFE_RE_WT      0.8f        // 感知区斥力权重倍率
 #define APF_OPEN_GAIN       (APF_ATTRACT_GAIN * 0.3f)  // 开阔方向引力 (补充前向力)
@@ -136,11 +136,13 @@ DS18B20_PIN         9   // TEMP-DQ
 #define MOTOR_MIN_COUNT     (MOTOR_MAX_COUNT * MOTOR_MIN_DUTY / 100U)    // 占空比对应的计数器值
 
 #define MOTOR_FREQ_HZ       SENSOR_FREQ * 2     // 电机控制任务频率，为传感器工作频率的两倍
-#define MOTOR_TIMEOUT_MS    1000        // 指令超时阈值，超时停车
-#define MOTOR_DEADZONE_MM   50.0f       // 笛卡控制尔死区
-#define MOTOR_TURN_RATIO    0.2f        // 差速转向中角分量的灵敏度
-#define MOTOR_MAX_MM        APF_SAFE_RANGE  // 输出幅值上限，用于向量归一化，影响平均速度
 #define MOTOR_EMA_TAU_MS    50          // EMA时间常数 τ (ms), 控制平滑收敛速度
 // α = 1 - exp(-dt/τ),  dt = 1000/MOTOR_FREQ_HZ,  τ = MOTOR_EMA_TAU_MS
 // α 越大响应越快 (τ 越小时 α 越接近 1)
 #define MOTOR_EMA_ALPHA     (1.0f - expf(-(float)(1000 / MOTOR_FREQ_HZ) / MOTOR_EMA_TAU_MS))
+#define MOTOR_MAX_MM        APF_SAFE_RANGE      // 输出幅值上限，用于向量归一化，影响平均速度
+#define MOTOR_TIMEOUT_MS    1000    // 指令超时阈值，超时停车
+#define MOTOR_DEADZONE_MM   80.0f   // 笛卡控制尔死区
+#define MOTOR_TURN_RATIO    0.25f   // 差速控制中角分量的基础灵敏度系数
+#define MOTOR_TURN_GAIN_MI  0.5f    // 差速控制中角分量的动态灵敏度下限
+#define MOTOR_TURN_GAIN_MX  2.0f - MOTOR_TURN_GAIN_MI   // 差速控制中角分量的动态灵敏度上限

@@ -106,7 +106,7 @@ void apf_task(void *pvParameters) {
             float ra = range * 0.001f;  // mm → m
             float rep = APF_REPULSE_GAIN * repulse_weight(range);
             rfx -= (rep / (ra * ra)) * cosf(rad);   // 1/r²: 切向采用平方反比
-            rfy -= (rep / ra) * sinf(rad);          // 1/r : 垂向采用线性反比
+            rfy -= (rep / ra) * sinf(rad);          // 1/r : 垂向采用线性反比，转弯更加平缓
         }
 
         cmd.dx = rfx + APF_ATTRACT_GAIN;
