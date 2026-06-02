@@ -16,7 +16,7 @@
 
 ## 项目结构
 
-```
+```bash
 ESP32_Template/
 ├── src/
 │   ├── main.c                    # 入口 — 系统/驱动/队列/任务创建编排
@@ -80,29 +80,69 @@ ESP32_Template/
 | `BIT_FLAME_Q_READY` | flame_task | apf_task | q_polar 有新火焰数据 |
 | `BIT_LOG_Q_READY` | apf_task | web_task | q_log 有新一帧日志数据 |
 
-## 数据流向
+## 系统四层框图
 
 ```mermaid
-graph TD
-    LD14P[LD14P LiDAR<br/>UART1 115200bps] -->|360 raw pts| LIDAR[ld14p<br/>prio:5]
-    FLAME[5ch IR Flame<br/>GPIO 11-14,16] -->|5 status bits| FL_TASK[flame<br/>prio:7]
-    DS18B20[DS18B20 Temp<br/>GPIO9 1-Wire] -->|float °C| TEMP[temp<br/>prio:6]
+graph TB
+    subgraph Sensing["感知层 (Sensing Layer)"]
+        LIDAR["LD14P 激光雷达<br/>UART1, 115200bps<br/>360点/圈, 4Hz"]
+        FLAME["5路火焰传感器<br/>GPIO 11-14,16<br/>前向120°, 4Hz"]
+        TEMP["DS18B20 温度传感器<br/>GPIO9, 1-Wire<br/>10-bit, 4Hz"]
+    end
 
-    LIDAR -->|60 polar vectors| QP[q_polar<br/>depth:65]
-    FL_TASK -->|5 polar vectors| QP
-    TEMP -->|float| QT[q_temp<br/>depth:4]
+    subgraph Fusion["融合决策层 (Fusion & Decision Layer)"]
+        APF["人工势场法 (APF)<br/>65维向量势场解算<br/>拆分斥力剖面 + 间隙跟随"]
+        SYNC["事件组同步<br/>eg_sync: 双位原子性等待<br/>260ms 超时保护"]
+    end
 
-    QP --> APF[apf<br/>prio:4]
-    APF -->|65 polar vectors| QL[q_log<br/>depth:65]
-    APF -->|cartesian cmd| QC[q_cart<br/>depth:1]
+    subgraph Actuation["执行层 (Actuation Layer)"]
+        EMA["EMA 低通平滑<br/>4Hz→8Hz 解耦"]
+        DIFF["差速分解 + 动态转向"]
+        PWM["DRV8833 双H桥<br/>LEDC PWM, 20kHz, 10-bit"]
+    end
 
-    QL --> WEB[web_task<br/>prio:3]
-    QT --> WEB
+    subgraph Comm["通信层 (Communication Layer)"]
+        AP["Wi-Fi AP<br/>SSID: APF-NVC<br/>192.168.1.1:80"]
+        WS["WebSocket /ws<br/>JSON 实时推送"]
+        HTTP["HTTP 静态文件服务<br/>SPIFFS /spiffs"]
+        BROWSER["浏览器端<br/>Canvas 雷达可视化"]
+    end
 
-    WEB -->|JSON via WebSocket /ws| BROWSER[Browser<br/>Canvas Radar View]
-    QC -->|xQueueOverwrite| MOTOR[motor<br/>prio:8<br/>EMA + diff-drive]
+    LIDAR -->|"q_polar (60点)"| APF
+    FLAME -->|"q_polar (5点)"| APF
+    TEMP -->|"q_temp (float)"| WS
+    APF -->|"q_cart (cmd向量)"| EMA
+    APF -->|"q_log (65点)"| WS
+    SYNC -.-> APF
+    EMA --> DIFF
+    DIFF --> PWM
+    PWM -->|"L/R PWM"| MOTOR["差速电机组"]
+    WS -->|"JSON帧, ~1.9KB"| BROWSER
+    HTTP -->|"HTML/CSS/JS"| BROWSER
+    AP -.-> WS
+    AP -.-> HTTP
+```
 
-    MOTOR -->|L/R PWM| DRV[DRV8833 Motors]
+## GPIO 连接示意图（不考虑 PCB）
+
+```mermaid
+graph LR
+    MCU["ESP32-S3<br/>N16R8"]
+
+    MCU -->|"UART1: GPIO17(TX)<br/>GPIO18(RX)<br/>飞线至焊盘3/43"| LD14P["LD14P<br/>LiDAR"]
+    MCU -->|"GPIO: 11,12,13,14,16<br/>数字输入, 内部上拉"| FLAME["5ch Flame<br/>IR Sensor"]
+    MCU -->|"GPIO9<br/>1-Wire, 外接4.7kΩ上拉"| DS18B20["DS18B20<br/>Temp Sensor"]
+    MCU -->|"LEDC: GPIO5,6(A)<br/>GPIO7,15(B)<br/>PWM 20kHz"| DRV8833["DRV8833<br/>Dual H-Bridge"]
+    MCU -->|"GPIO48"| LED["On-board LED"]
+
+    DRV8833 -->|"Motor A"| ML["Left Motors<br/>并联"]
+    DRV8833 -->|"Motor B"| MR["Right Motors<br/>并联"]
+
+    PWR5V["5V Power (USB)"] --> MCU
+    PWR5V["5V Power (USB)"] --> DRV8833
+    PWR5V --> LD14P
+    MCU -->|"3V3"| FLAME
+    MCU -->|"3V3"| DS18B20
 ```
 
 ## 网页雷达可视化
