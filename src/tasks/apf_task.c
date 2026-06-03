@@ -52,10 +52,12 @@ void apf_task(void *pvParameters) {
         EventBits_t bits = xEventGroupWaitBits(eg_sync, BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY,
             pdFALSE, pdTRUE, period);
         if ((bits & (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) != (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) {
-            ESP_LOGW(TAG, "Sensor sync timeout");   // 传感器数据等待超时
-            cmd.dx = cmd.dy = 0.0f;
-            xQueueOverwrite(q_cart, &cmd);   // 空指令滑行
-            g_cart_cmd = cmd;
+            if (!(xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE)) {
+                ESP_LOGW(TAG, "Sensor sync timeout");   // 传感器数据等待超时
+                cmd.dx = cmd.dy = 0.0f;
+                xQueueOverwrite(q_cart, &cmd);   // 空指令滑行
+                g_cart_cmd = cmd;
+            }
             continue;
         }
         if (xEventGroupGetBits(eg_sync) & BIT_LOG_Q_READY) {
@@ -74,6 +76,8 @@ void apf_task(void *pvParameters) {
         // 清除传感器位, 通知日志任务
         xEventGroupClearBits(eg_sync, BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY);
         xEventGroupSetBits(eg_sync, BIT_LOG_Q_READY);
+
+        if (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) continue;    // 手动模式: 仅透传雷达数据, 跳过 APF 解算
 
         n_noise = 0;
         n_danger = 0;

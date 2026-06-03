@@ -46,6 +46,7 @@ extern vector_cart_t        g_cart_cmd; // 最新 APF 合力指令 (web_task 绕
 #define BIT_TEMP_Q_READY    (1 << 1)    // q_temp 中有新的温度数据
 #define BIT_FLAME_Q_READY   (1 << 2)    // q_polar 中有新的火焰传感器数据
 #define BIT_LOG_Q_READY     (1 << 3)    // q_log 中有新的一帧日志数据
+#define BIT_MANUAL_MODE     (1 << 4)    // 0=自动模式(APF), 1=手动模式(WebSocket)
 
 // 引脚分配
 

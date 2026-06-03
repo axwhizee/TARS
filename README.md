@@ -9,7 +9,7 @@
 | 主控 | ESP32-S3 (16MB Flash, 8MB Octal PSRAM) | — |
 | 激光雷达 | LD14P | UART1 (TX:17, RX:18), 115200bps |
 | 火焰传感器 | 5× IR 红外 | GPIO 11, 12, 13, 14, 16 (注意: 15 已被电机占用) |
-| 温度传感器 | DS18B20 | GPIO9 (1-Wire, 需外接 4.7kΩ 上拉) |
+| 温度传感器 | ESP32-S3 内置 (原 DS18B20 已弃用) | 内部温度传感器 API |
 | 电机驱动 | DRV8833 ×2 | A: GPIO5/6, B: GPIO7/15, LEDC PWM 20kHz |
 | 心跳 LED | 板载 | GPIO48 |
 | 通信 | Wi-Fi AP (APF-NVC, 无密码) | IP 192.168.1.1, HTTP Port 80 |
@@ -23,15 +23,15 @@ ESP32_Template/
 │   ├── sys_init.c                # ESP32 系统级初始化 (NVS / SPIFFS / Wi-Fi AP)
 │   ├── CMakeLists.txt            # 源文件自动发现 + 组件依赖
 │   ├── drivers/
-│   │   ├── ds18b20.c             # DS18B20 1-Wire 底层驱动 (GPIO 位操作 + CRC8)
+│   │   ├── ds18b20.c             # DS18B20 驱动 (死代码, 已被内部温度传感器替代)
 │   │   ├── ld14p.c               # LD14P UART 协议帧解析 + CRC8 校验
 │   │   └── drv8833.c             # DRV8833 LEDC PWM 输出 + 制动
 │   └── tasks/
-│       ├── web_task.c            # HTTP 文件服务 (SPIFFS) + WebSocket JSON 推送
-│       ├── lidar_task.c          # LiDAR 数据采集 + 360→60 降采样
+│       ├── web_task.c            # HTTP/WS 服务器 + JSON 推送 + 手动遥控
+│       ├── lidar_task.c          # LiDAR 数据采集 + 360→72 降采样
 │       ├── flame_task.c          # 5 路火焰检测 + 极坐标映射
-│       ├── temp_task.c           # DS18B20 周期采样 (4Hz)
-│       ├── apf_task.c            # 人工势场法避障解算
+│       ├── temp_task.c           # ESP32-S3 内置温度传感器 (4Hz)
+│       ├── apf_task.c            # 人工势场法避障解算 + 手动模式切换
 │       └── motor_task.c          # EMA 平滑 + 差速 PWM 控制
 ├── include/
 │   ├── apf_common.h              # 全局类型/宏定义/RTOS 句柄 extern 声明
@@ -52,11 +52,11 @@ ESP32_Template/
 
 | 任务名 | 优先级 | 栈 (words) | 周期 | 功能 |
 |---|---|---|---|---|
-| `LedTask` | 1 | 2048 | 1Hz | 心跳 LED 翻转 |
-| `web_task` | 3 | 8192 | 事件驱动 | HTTP 服务器 + SPIFFS 文件服务 + WebSocket JSON 推送 |
-| `apf` | 4 | 4096 | 4Hz | 人工势场解算: 前向引力 + 间隙跟随引力 + 拆分斥力 (x:1/r², y:1/r) |
-| `ld14p` | 5 | 8192 | 事件驱动 | UART 读帧, CRC8 校验, 360→60 降采样 |
-| `temp` | 6 | 4096 | 4Hz | DS18B20 温度采集 |
+| `sysmon` | 1 | 2048 | 1Hz | 心跳 LED + 运行时统计 |
+| `web_task` | 3 | 8192 | 事件驱动 | HTTP/WS 服务器 + JSON 推送 + 手动遥控 |
+| `apf` | 4 | 4096 | 4Hz | APF 解算 (自动) / 透传雷达 (手动) |
+| `ld14p` | 5 | 8192 | 事件驱动 | UART 读帧, CRC8, 360→72 降采样 |
+| `temp` | 6 | 4096 | 4Hz | ESP32-S3 内置温度传感器 |
 | `flame` | 7 | 2048 | 4Hz | 5 路红外火焰状态检测 |
 | `motor` | 8 | 4096 | 8Hz | EMA 平滑 + 差速分解 + PWM 输出 |
 
@@ -66,10 +66,10 @@ ESP32_Template/
 
 | 队列 | 深度 | 元素类型 | 生产者 → 消费者 |
 |---|---|---|---|
-| `q_polar` | 65 | `vector_polar_t` | LiDAR(60) + Flame(5) → APF |
-| `q_cart` | 1 | `vector_cart_t` | APF → Motor (xQueueOverwrite) |
-| `q_temp` | 4 | `float` | DS18B20 → web_task |
-| `q_log` | 65 | `vector_polar_t` | APF → web_task |
+| `q_polar` | 77 | `vector_polar_t` | LiDAR(72) + Flame(5) → APF |
+| `q_cart` | 1 | `vector_cart_t` | APF/ws_handler → Motor (xQueueOverwrite) |
+| `q_temp` | 4 | `float` | temp_task → web_task |
+| `q_log` | 77 | `vector_polar_t` | APF → web_task |
 
 ### 事件组 `eg_sync`
 
@@ -79,6 +79,7 @@ ESP32_Template/
 | `BIT_TEMP_Q_READY` | temp_task | web_task | q_temp 有新温度数据 |
 | `BIT_FLAME_Q_READY` | flame_task | apf_task | q_polar 有新火焰数据 |
 | `BIT_LOG_Q_READY` | apf_task | web_task | q_log 有新一帧日志数据 |
+| `BIT_MANUAL_MODE` | web_task | web_task | 0=自动(APF), 1=手动(前端摇杆) |
 
 ## 系统四层框图
 
@@ -87,11 +88,11 @@ graph TB
     subgraph Sensing["感知层 (Sensing Layer)"]
         LIDAR["LD14P 激光雷达<br/>UART1, 115200bps<br/>360点/圈, 4Hz"]
         FLAME["5路火焰传感器<br/>GPIO 11-14,16<br/>前向120°, 4Hz"]
-        TEMP["DS18B20 温度传感器<br/>GPIO9, 1-Wire<br/>10-bit, 4Hz"]
+        TEMP["ESP32-S3 内置温度<br/>传感器, 4Hz"]
     end
 
     subgraph Fusion["融合决策层 (Fusion & Decision Layer)"]
-        APF["人工势场法 (APF)<br/>65维向量势场解算<br/>拆分斥力剖面 + 间隙跟随"]
+        APF["人工势场法 (APF)<br/>77维向量势场解算<br/>拆分斥力剖面 + 间隙跟随"]
         SYNC["事件组同步<br/>eg_sync: 双位原子性等待<br/>260ms 超时保护"]
     end
 
@@ -108,11 +109,11 @@ graph TB
         BROWSER["浏览器端<br/>Canvas 雷达可视化"]
     end
 
-    LIDAR -->|"q_polar (60点)"| APF
+    LIDAR -->|"q_polar (72点)"| APF
     FLAME -->|"q_polar (5点)"| APF
     TEMP -->|"q_temp (float)"| WS
     APF -->|"q_cart (cmd向量)"| EMA
-    APF -->|"q_log (65点)"| WS
+    APF -->|"q_log (77点)"| WS
     SYNC -.-> APF
     EMA --> DIFF
     DIFF --> PWM
@@ -131,7 +132,7 @@ graph LR
 
     MCU -->|"UART1: GPIO17(TX)<br/>GPIO18(RX)<br/>飞线至焊盘3/43"| LD14P["LD14P<br/>LiDAR"]
     MCU -->|"GPIO: 11,12,13,14,16<br/>数字输入, 内部上拉"| FLAME["5ch Flame<br/>IR Sensor"]
-    MCU -->|"GPIO9<br/>1-Wire, 外接4.7kΩ上拉"| DS18B20["DS18B20<br/>Temp Sensor"]
+    MCU -->|"GPIO9<br/>内部温度 (DS18B20 已弃用)"| TSENS["Internal<br/>Temp Sensor"]
     MCU -->|"LEDC: GPIO5,6(A)<br/>GPIO7,15(B)<br/>PWM 20kHz"| DRV8833["DRV8833<br/>Dual H-Bridge"]
     MCU -->|"GPIO48"| LED["On-board LED"]
 
@@ -142,32 +143,35 @@ graph LR
     PWR5V["5V Power (USB)"] --> DRV8833
     PWR5V --> LD14P
     MCU -->|"3V3"| FLAME
-    MCU -->|"3V3"| DS18B20
 ```
 
-## 网页雷达可视化
+## 网页雷达可视化 + 手动遥控
 
-ESP32 内置 Web 服务器，连接其 Wi-Fi (`APF-NVC`) 后浏览器访问 `http://192.168.1.1` 即可看到实时雷达图:
+ESP32 内置 Web 服务器，连接其 Wi-Fi (`APF-NVC`) 后浏览器访问 `http://192.168.1.1`:
 
-- **Canvas 极坐标渲染** — 零外部依赖，纯前端实现
+**雷达显示**:
+- Canvas 极坐标渲染 — 零外部依赖
 - 同心圆距离网格 (1m~6m, 危险区/安全区分色)
-- 旋转扫描线动画
-- 散点着色: 红色 <1m (危险), 绿色 1~6m (安全), 青色 >6m
-- 实时温度显示 + 危险/安全点统计
+- 散点着色: 红色 (危险区), 绿色 (安全/感知区), 黄色 (噪声区)
+- 实时温度显示 (绿 <30°, 黄 30-50°, 红 >50°) + 统计
+- 蓝色方向线 = 自动模式 (APF), 红色 = 手动摇杆
 
-网页由 ESP32 的 SPIFFS 分区提供 (`data/` 目录), 通过 WebSocket (`ws://192.168.1.1:80/ws`) 接收 JSON 数据流。
+**手动遥控**: 顶部状态栏点击「自动」按钮切换手动模式，在雷达图上拖拽即可控制小车方向 (8Hz, 5% 死区)。松开后车停止，按钮切回自动模式恢复 APF 导航。移动端已禁用触摸手势 (touch-action:none)，切 tab 时自动停车。
+
+网页通过 WebSocket (`ws://192.168.1.1:80/ws`) 接收 JSON 数据流并上行遥控指令。
 
 ## WebSocket 数据格式
 
-JSON 帧结构 (cJSON 序列化, 每帧 ~2.5KB):
+JSON 帧结构 (ESP32 端 snprintf 手写, ~1.9KB):
 
 ```json
 {
   "ts": 1234567890,
   "temp": 25.50,
+  "mode": "auto",
+  "cart": {"dx": 4000.0, "dy": 0.0},
   "vectors": [
     {"a": 2.5, "d": 1234.5},
-    {"a": 7.5, "d": 2345.6},
     ...
     {"a": 357.5, "d": 4567.8}
   ]
@@ -175,8 +179,18 @@ JSON 帧结构 (cJSON 序列化, 每帧 ~2.5KB):
 ```
 
 - `ts`: esp_timer_get_time() 微秒时间戳
-- `temp`: 温度值 (°C)，无数据时为 `NaN`
-- `vectors`: 65 个极坐标点 `{angle_deg, distance_mm}` (60 LiDAR + 5 Flame)
+- `temp`: 温度值 (°C)，无数据时为 `null`
+- `mode`: `"auto"` 或 `"manual"`，反映当前驾驶模式
+- `cart`: APF 输出 (自动) 或摇杆指令 (手动) 的笛卡尔合力 `{dx, dy}`
+- `vectors`: 77 个极坐标点 `{a: angle_deg, d: distance_mm}` (72 LiDAR + 5 Flame)
+
+### 上行指令 (浏览器 → ESP32)
+
+```json
+{"mode":"manual"}             // 切换手动模式
+{"mode":"auto"}               // 恢复自动驾驶
+{"cmd":{"dx":1234,"dy":-567}} // 摇杆控制指令 (仅手动模式生效)
+```
 
 ## 构建与烧录
 
@@ -233,9 +247,11 @@ pio run -t upload -t uploadfs -t monitor
 
 - **双频率解耦**: APF 势场解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ 可调, 默认 50ms, 见 `MOTOR_EMA_TAU_MS`) 消除帧间抖动
 - **无锁同步**: FreeRTOS 事件组 + 队列完成所有任务间通信, 无共享内存竞争
-- **极坐标统一**: LiDAR 60 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, APF 算法输入为 65 维齐次向量
+- **极坐标统一**: LiDAR 72 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, APF 算法输入为 77 维齐次向量
 - **拆分斥力剖面**: x 分量使用 1/r² 控制后退时机, y 分量使用 1/r 使转向力分布更均匀, 避免近距爆发
 - **间隙跟随**: 前方 120° 锥形内最开阔方向施加补充引力 (APF_OPEN_GAIN), 使小车沿走廊方向行进而非在两墙间折返
 - **日志无阻塞**: Web 任务仅等 BIT_LOG_Q_READY, 温度非阻塞取最新值, 确保雷达数据流不因低速传感器卡顿
 - **板载 Web 可视化**: Canvas 2D API 实现极坐标雷达图, 无任何 CDN 依赖, 13KB 文件通过 SPIFFS 部署在 ESP32 上
 - **Wi-Fi AP 模式**: 开放热点, 无需外部路由器, 任何设备连接后即可打开网页查看雷达
+
+- **手动遥控模式**: 通过 BIT_MANUAL_MODE 事件位协调 apf_task 暂停 / ws_handler 接管 q_cart 控制权，前端 Canvas 摇杆实时直控

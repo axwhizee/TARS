@@ -155,7 +155,7 @@ void sysmon_task(void *pvParameters) {
         if ((now - last_stats) >= pdMS_TO_TICKS(STATS_PERIOD_MS)) {
             last_stats = now;
             vTaskGetRunTimeStats(buf);
-            ESP_LOGI(TAG, "CPU %.1f%%\n%s", cpu, buf);
+            // ESP_LOGI(TAG, "CPU %.1f%%\n%s", cpu, buf);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000));  // 1Hz

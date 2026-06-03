@@ -1,13 +1,16 @@
 /**
  * @file web_task.c
- * @brief Web 服务 — 内存直出静态文件 + WebSocket JSON 推送
+ * @brief HTTP 静态文件服务 + WebSocket JSON 推送 + 手动遥控
  *
- * 初始化流程:
- *   0. preload_static_files() — SPIFFS → PSRAM (一次性)
- *   1. httpd_start(port 80, max_open_sockets=16)
- *   2. 注册 3 个静态文件 URI + 1 个 WebSocket URI
- *   3. 主循环: BIT_LOG_Q_READY → JSON → 广播到全部 WS 客户端
+ * 三条数据路径:
+ *   A) HTTP GET → 预加载的 PSRAM buffer (零 fopen 争用)
+ *   B) WS 下行 → apf_task→q_log→主循环→snprintf JSON→ws_send_all 广播
+ *   C) WS 上行 → 事件驱动 ws_handler (单帧即返)→cJSON 解析→q_cart/g_cart_cmd
+ *
+ * ws_handler 采用 IDF 官方回调模式 (无 while(1)), 配合 cfg.close_fn 清理.
+ * 主循环 JSON 手写 snprintf 避免堆碎片, 上行小消息用 cJSON 临时解析.
  */
+
 #include "tasks/web_task.h"
 #include "apf_common.h"
 #include "freertos/FreeRTOS.h"
@@ -18,33 +21,34 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
-// #include "cJSON.h"
+#include "cJSON.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <errno.h>
 
-#define WS_MAX_CLIENTS  4
-#define HTTPD_MAX_FDS   16
+#define WS_MAX_CLIENTS  4   // 最大并发 WebSocket 客户端数
+#define HTTPD_MAX_FDS   16  // httpd 内部最大文件描述符数 (含 WS socket + TCP)
 
 static const char *TAG = "WEB_TASK ";
 
-// HTTP/WebSocket 服务端共享状态
-static httpd_handle_t ws_server = NULL;
-static int            ws_fds[WS_MAX_CLIENTS];
-static int            ws_count = 0;
-static SemaphoreHandle_t ws_mutex = NULL;
+static httpd_handle_t ws_server = NULL;       // HTTP 服务器句柄
+static int            ws_fds[WS_MAX_CLIENTS]; // 已连接 WS 客户端的 socket fd 数组
+static int            ws_count = 0;           // 当前连接数
+static SemaphoreHandle_t ws_mutex = NULL;     // 保护 ws_fds/ws_count 的互斥锁
 
-// 预加载静态文件 (启动时从SPIFFS读取一次, 后续直接内存服务, 消灭fopen争用)
+// 静态文件预加载
 typedef struct {
-    const char *uri;
-    const char *mime;
-    uint8_t    *data;
-    size_t      len;
+    const char *uri;   // 请求路径, 如 "/index.html"
+    const char *mime;  // Content-Type, 如 "text/html"
+    uint8_t    *data;  // 文件内容 (malloc 分配在 PSRAM, 启动后永不释放)
+    size_t      len;   // 文件字节数
 } static_file_t;
 
 static static_file_t s_files[3];
 
+// SPIFFS 不支持并发读, 启动时一次性预加载到 PSRAM, 后续 HTTP GET 零 fopen
 static void preload_static_files(void) {
     const char *paths[] = {"/index.html", "/style.css", "/script.js"};
     const char *mimes[] = {"text/html", "text/css", "application/javascript"};
@@ -65,13 +69,14 @@ static void preload_static_files(void) {
     }
 }
 
-// WebSocket 客户端集合 (互斥保护)
+// WS 客户端管理
 static void ws_add_client(int fd) {
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
     if (ws_count < WS_MAX_CLIENTS) ws_fds[ws_count++] = fd;
     xSemaphoreGive(ws_mutex);
 }
 
+// 交换式删除 (swap-with-last), O(1)
 static void ws_remove_client(int fd) {
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
     for (int i = 0; i < ws_count; i++) {
@@ -80,13 +85,16 @@ static void ws_remove_client(int fd) {
     xSemaphoreGive(ws_mutex);
 }
 
-// WebSocket 广播 — 拷贝 fd 后发送, 不持锁避免阻塞 ws_handler
+// WS 下行广播快照：异步发送 → 失败 fd 懒清理 (不持锁发送, 避免阻塞 ws_handler)
 static void ws_send_all(const char *data, size_t len) {
+    // 构造 WebSocket 文本帧
     httpd_ws_frame_t pkt = {
         .type    = HTTPD_WS_TYPE_TEXT,
         .payload = (uint8_t *)data,
         .len     = len,
     };
+
+    // 步骤 1: 快照客户端列表 (持锁)
     int count;
     int fds[WS_MAX_CLIENTS];
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
@@ -94,22 +102,26 @@ static void ws_send_all(const char *data, size_t len) {
     memcpy(fds, ws_fds, count * sizeof(int));
     xSemaphoreGive(ws_mutex);
 
+    // 步骤 2: 逐个发送, 收集存活 fd
     int live = 0;
     for (int i = 0; i < count; i++) {
         esp_err_t err = httpd_ws_send_frame_async(ws_server, fds[i], &pkt);
         if (err == ESP_OK)
-            fds[live++] = fds[i];
+            fds[live++] = fds[i];        // 发送成功, 保留
         else
             ESP_LOGW(TAG, "WS send failed fd=%d err=%d, removing", fds[i], err);
     }
 
+    // 步骤 3: 更新活跃客户端列表 (持锁)
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
     ws_count = live;
     memcpy(ws_fds, fds, live * sizeof(int));
     xSemaphoreGive(ws_mutex);
 }
 
-// HTTP GET 静态文件处理器 (内存直出, 无SPIFFS FILE*争用)
+// 
+
+// HTTP 静态文件处理
 static esp_err_t file_get_handler(httpd_req_t *req) {
     const char *uri = req->uri;
     if (strcmp(uri, "/") == 0) uri = "/index.html";
@@ -127,56 +139,133 @@ static esp_err_t file_get_handler(httpd_req_t *req) {
     return ESP_FAIL;
 }
 
-// WebSocket 处理：阻塞等待客户端关闭或错误, 自动回复 PING → PONG 保持连接
+// httpd 框架在连接断开时自动调用 (CLOSE/RST/超时)
+static void ws_close_cb(httpd_handle_t hd, int sockfd) {
+    (void)hd;
+    ws_remove_client(sockfd);
+    ESP_LOGI(TAG, "WS client disconnected (close_cb), fd=%d", sockfd);
+}
+
+/**
+ * @brief WS handler — 事件驱动, 每次调用只处理一帧.
+ *
+ * 关键约束:
+ *   1. 绝对不能有 while(1) — httpd 底层 select 多路复用, 循环阻塞会破坏调度
+ *   2. 两步读取 (max_len=0 取帧头, max_len=pkt.len 取载荷) 确保缓冲区不残留
+ *   3. cfg.close_fn 在连接断开时自动清理 ws_fds
+ */
 static esp_err_t ws_handler(httpd_req_t *req) {
-    int fd = httpd_req_to_sockfd(req);
-    ws_add_client(fd);
-    ESP_LOGI(TAG, "WS client connected, fd=%d, total=%d", fd, ws_count);
+    // 握手: 注册客户端 (cfg.close_fn 负责清理)
+    if (req->method == HTTP_GET) {
+        int fd = httpd_req_to_sockfd(req);
+        ws_add_client(fd);
+        ESP_LOGI(TAG, "WS client connected, fd=%d, total=%d", fd, ws_count);
+        return ESP_OK;
+    }
 
-    uint8_t buf[256];
-    httpd_ws_frame_t pkt = { .payload = buf };
-    int errs = 0;
+    // 数据帧 — 两步法读取
+    httpd_ws_frame_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
 
-    while (1) {
-        esp_err_t ret = httpd_ws_recv_frame(req, &pkt, sizeof(buf));
-        if (ret != ESP_OK) {
-            // EAGAIN/EWOULDBLOCK 是接收端WS正常超时（客户端不发数据只收）
-            // 不累计错误，避免误踢空闲客户端
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                vTaskDelay(pdMS_TO_TICKS(50));
-                continue;
-            }
-            if (++errs > 32) break;
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
+    // Step A: 读帧头 (max_len=0)
+    esp_err_t ret = httpd_ws_recv_frame(req, &pkt, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS recv header failed: %d", ret);
+        return ESP_FAIL;
+    }
+
+    if (pkt.type == HTTPD_WS_TYPE_CLOSE) return ESP_OK;    // close_fn 自动清理
+
+    if (pkt.type == HTTPD_WS_TYPE_PING) {
+        uint8_t ping_buf[128];
+        if (pkt.len > 0 && pkt.len <= sizeof(ping_buf)) {
+            pkt.payload = ping_buf;
+            ret = httpd_ws_recv_frame(req, &pkt, pkt.len);
         }
-        errs = 0;
-        if (pkt.type == HTTPD_WS_TYPE_CLOSE) break;
-        if (pkt.type == HTTPD_WS_TYPE_PING) {
+        if (ret == ESP_OK) {
             pkt.type = HTTPD_WS_TYPE_PONG;
             httpd_ws_send_frame(req, &pkt);
         }
+        return ESP_OK;
     }
 
-    ws_remove_client(fd);
-    ESP_LOGI(TAG, "WS client disconnected, fd=%d, remaining=%d", fd, ws_count);
+    if (pkt.type == HTTPD_WS_TYPE_TEXT && pkt.len > 0) {
+        if (pkt.len > 512) {
+            ESP_LOGW(TAG, "WS msg too long (%d bytes)", (int)pkt.len);
+            return ESP_FAIL;
+        }
+
+        uint8_t stack_buf[256];
+        uint8_t *payload = stack_buf;
+        if (pkt.len > sizeof(stack_buf)) {
+            payload = malloc(pkt.len);
+            if (!payload) return ESP_FAIL;
+        }
+
+        pkt.payload = payload;
+        // Step B: 读完整载荷
+        ret = httpd_ws_recv_frame(req, &pkt, pkt.len);
+
+        if (ret == ESP_OK) {
+            cJSON *root = cJSON_ParseWithLength((const char *)pkt.payload, pkt.len);
+            if (root) {
+                cJSON *mode = cJSON_GetObjectItem(root, "mode");
+                if (mode && cJSON_IsString(mode)) {
+                    if (strcmp(mode->valuestring, "manual") == 0) {
+                        xEventGroupSetBits(eg_sync, BIT_MANUAL_MODE);
+                        vector_cart_t stop = { .dx = 0.0f, .dy = 0.0f };
+                        xQueueOverwrite(q_cart, &stop);
+                        g_cart_cmd = stop;
+                        ESP_LOGI(TAG, "=== Manual mode ON ===");
+                    } else if (strcmp(mode->valuestring, "auto") == 0) {
+                        xEventGroupClearBits(eg_sync, BIT_MANUAL_MODE);
+                        ESP_LOGI(TAG, "=== Auto mode restored ===");
+                    }
+                }
+
+                if (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) {
+                    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
+                    if (cmd) {
+                        cJSON *dx = cJSON_GetObjectItem(cmd, "dx");
+                        cJSON *dy = cJSON_GetObjectItem(cmd, "dy");
+                        if (cJSON_IsNumber(dx) && cJSON_IsNumber(dy)) {
+                            vector_cart_t c = {
+                                .dx = (float)dx->valuedouble,
+                                .dy = (float)dy->valuedouble,
+                            };
+                            xQueueOverwrite(q_cart, &c);
+                            g_cart_cmd = c;
+                        }
+                    }
+                }
+                cJSON_Delete(root);
+            }
+        }
+        if (payload != stack_buf) free(payload);
+    }
+
     return ESP_OK;
 }
 
+/**
+ * 初始化: preload → httpd_start → 注册 URI → 主循环
+ * JSON 格式: {"ts","temp","mode":"auto"|"manual","cart":{"dx","dy"},"vectors":[...]}
+ *   下行 JSON 全部 snprintf 手写 (避免 77×cJSON malloc 导致堆碎片)
+ *   g_cart_cmd 来源: 自动=apf_task, 手动=ws_handler
+ */
 void web_task(void *pvParameters) {
     (void)pvParameters;
     ws_mutex = xSemaphoreCreateMutex();
 
-    // 0. 启动前预加载静态文件 (一次 SPIFFS 读取, 后续内存直出)
     preload_static_files();
 
-    // 1. 启动 HTTP 服务器
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port        = WEBSOCKET_PORT;
     cfg.max_open_sockets   = HTTPD_MAX_FDS;
     cfg.lru_purge_enable   = true;
-    cfg.recv_wait_timeout  = 2;
-    cfg.send_wait_timeout  = 2;
+    // cfg.recv_wait_timeout  = 2;               // WS 长连接不设超时, 依赖 select 事件驱动
+    cfg.close_fn            = ws_close_cb;       // 连接断开时框架自动清理 ws_fds
+    cfg.send_wait_timeout   = 2;
 
     if (httpd_start(&ws_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server start failed");
@@ -184,7 +273,6 @@ void web_task(void *pvParameters) {
         return;
     }
 
-    // 2. 注册静态文件 URI (非 WebSocket, 匹配普通 HTTP GET)
     httpd_uri_t file_uris[] = {
         {.uri = "/",          .method = HTTP_GET, .handler = file_get_handler},
         {.uri = "/style.css", .method = HTTP_GET, .handler = file_get_handler},
@@ -193,23 +281,17 @@ void web_task(void *pvParameters) {
     for (int i = 0; i < sizeof(file_uris) / sizeof(file_uris[0]); i++)
         httpd_register_uri_handler(ws_server, &file_uris[i]);
 
-    // 3. 注册 WebSocket URI (仅匹配 Upgrade: websocket 请求)
     httpd_uri_t ws_uri = {
-        .uri          = "/ws",
-        .method       = HTTP_GET,
-        .handler      = ws_handler,
-        .is_websocket = true,
+        .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true,
     };
     httpd_register_uri_handler(ws_server, &ws_uri);
 
     ESP_LOGI(TAG, "HTTP + WebSocket server on port %d", WEBSOCKET_PORT);
 
-    // 4. 数据推送主循环 — 每轮等待 APF 产出新一帧日志
-    char json_buf[3600];
+    char json_buf[4096];
     while (1) {
         xEventGroupWaitBits(eg_sync, BIT_LOG_Q_READY, pdFALSE, pdFALSE, portMAX_DELAY);
 
-        // 无客户端连接时仅消费队列, 跳过 JSON 构建
         int count;
         xSemaphoreTake(ws_mutex, portMAX_DELAY);
         count = ws_count;
@@ -225,19 +307,24 @@ void web_task(void *pvParameters) {
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++)
             xQueueReceive(q_log, &vectors[i], 0);
-        float temp = NAN;
         vector_cart_t cart = g_cart_cmd;
+
+        float temp = NAN;
         xQueueReceive(q_temp, &temp, 0);
 
         xEventGroupClearBits(eg_sync, BIT_LOG_Q_READY | BIT_TEMP_Q_READY);
-        int64_t ts_us = esp_timer_get_time();
 
-        // 手动构建 JSON (单缓冲区, 避免 cJSON 多次 malloc 导致堆碎片)
+        // 手写 JSON (不用 cJSON: 77 向量 × 4Hz = 200+ malloc/s, 堆碎片严重)
+        int64_t ts_us = esp_timer_get_time();
         int pos = snprintf(json_buf, sizeof(json_buf), "{\"ts\":%lld,\"temp\":", ts_us);
         if (isnan(temp))
             pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "null");
         else
             pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "%.2f", temp);
+
+        pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
+            ",\"mode\":\"%s\"",
+            (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) ? "manual" : "auto");
         pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
             ",\"cart\":{\"dx\":%.2f,\"dy\":%.2f},\"vectors\":[", cart.dx, cart.dy);
 
@@ -248,9 +335,9 @@ void web_task(void *pvParameters) {
                 vectors[i].angle, vectors[i].distance,
                 (i < Q_POLAR_DEPTH - 1) ? "," : "");
         }
-
         pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "]}");
+
         ws_send_all(json_buf, pos);
-        ESP_LOGI(TAG, "Sent %d bytes to %d client(s)\n", pos, ws_count);
+        ESP_LOGI(TAG, "Sent %d bytes to %d client(s)\n", pos, count);
     }
 }

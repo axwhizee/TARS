@@ -1,45 +1,56 @@
-const CONFIG = {
-    MAX_DISTANCE_MM: 5000,
-    SAFE_DISTANCE_MM: 4000,
-    DANGER_DISTANCE_MM: 800,
-    PERCEPTION_MIN: 100,
-    GRID_STEPS: [1000, 2000, 3000, 4000],
-    C: {
-        grid: '#3c3c5c58',
-        text: '#888',
-        dangerFill: 'rgba(255,68,68,0.06)',
-        safeFill: 'rgba(68,255,68,0.03)',
-        dangerLine: 'rgba(255,68,68,0.30)',
-        safeLine: 'rgba(68,255,68,0.30)',
-        pointDanger: '#ff4444',
-        pointSafe: '#44ff44',
-        pointNoise: '#888888'
-    }
+const D2R = Math.PI / 180;
+const MAX = 5000, SAFE = 4000, DANGER = 800, PMIN = 100;
+const DEAD_RATIO = 0.05;
+const JS_SEND_MS = 125;
+
+const CLR = {
+    red:    '#ff4444',
+    green:  '#44ff44',
+    yellow: '#ffaa00',
+    blue:   '#55bbff',
+    text:   '#c0c0d0',
+    grid:   'rgba(200,200,220,0.15)',
 };
 
-const D2R = Math.PI / 180;
-
-let radarData = [];
-let cartCmd = null;
+let radarData = [], cartCmd = null;
 let ws = null, isConnected = false;
 let canvas, ctx, w, h, cx, cy, r;
 
+let isManualMode = false, jsActive = false;
+let joystickCmd = { dx: 0, dy: 0 }, lastSendMs = 0;
+
 function hexToRgba(hex, a) {
     const i = parseInt(hex.slice(1), 16);
-    return `rgba(${(i>>16)&0xff},${(i>>8)&0xff},${i&0xff},${a})`;
+    return `rgba(${(i >> 16) & 0xff},${(i >> 8) & 0xff},${i & 0xff},${a})`;
 }
 
 function getColor(d) {
-    if (d < CONFIG.PERCEPTION_MIN)        return CONFIG.C.pointNoise;
-    if (d <= CONFIG.DANGER_DISTANCE_MM) return CONFIG.C.pointDanger;
-    if (d <= CONFIG.SAFE_DISTANCE_MM)    return CONFIG.C.pointSafe;
-    return CONFIG.C.pointNoise;
+    if (d < PMIN)   return CLR.yellow;
+    if (d <= DANGER) return CLR.red;
+    if (d <= SAFE)   return CLR.green;
+    return CLR.yellow;
 }
 
-function toCanvas(deg, dist) {
+function toCanvasRad(deg, dist) {
     const rad = deg * D2R;
-    const s = dist / CONFIG.MAX_DISTANCE_MM * r;
-    return { x: cx + s * Math.sin(rad), y: cy - s * Math.cos(rad) };
+    return { x: cx + dist / MAX * r * Math.sin(rad), y: cy - dist / MAX * r * Math.cos(rad) };
+}
+
+function sendWs(data) {
+    if (ws && ws.readyState === WebSocket.OPEN)
+        try { ws.send(JSON.stringify(data)); } catch (_) {}
+}
+
+function sendCmdNow() {
+    const c = { dx: joystickCmd.dx, dy: joystickCmd.dy };
+    if (c.dx < 0) c.dy = -c.dy;
+    sendWs({ cmd: c });
+}
+
+function sendResetJoystick() {
+    jsActive = false;
+    joystickCmd = { dx: 0, dy: 0 };
+    sendCmdNow();
 }
 
 function init() {
@@ -52,8 +63,8 @@ function init() {
 
 function resize() {
     const dpr = devicePixelRatio || 1;
-    const R = canvas.parentElement.getBoundingClientRect();
-    w = R.width; h = R.height;
+    const B = canvas.parentElement.getBoundingClientRect();
+    w = B.width; h = B.height;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
     canvas.style.width = w + 'px';
@@ -63,44 +74,43 @@ function resize() {
     r = Math.min(cx, cy) * 0.82;
 }
 
-function toR(mm) { return mm / CONFIG.MAX_DISTANCE_MM * r; }
+function toR(mm) { return mm / MAX * r; }
 
-function fillRing(innerMM, outerMM, style) {
+function fillRing(inner, outer, style) {
     ctx.beginPath();
-    ctx.arc(cx, cy, toR(outerMM), 0, 2 * Math.PI);
-    if (innerMM > 0) ctx.arc(cx, cy, toR(innerMM), 0, 2 * Math.PI, true);
+    ctx.arc(cx, cy, toR(outer), 0, 2 * Math.PI);
+    if (inner) ctx.arc(cx, cy, toR(inner), 0, 2 * Math.PI, true);
     ctx.fillStyle = style;
     ctx.fill();
 }
 
-function strokeRing(mm, style, w, dash) {
+function strokeRing(mm, style, lw, dash) {
     ctx.beginPath();
     ctx.arc(cx, cy, toR(mm), 0, 2 * Math.PI);
     ctx.strokeStyle = style;
-    ctx.lineWidth = w;
+    ctx.lineWidth = lw;
     if (dash) ctx.setLineDash(dash);
     ctx.stroke();
     ctx.setLineDash([]);
 }
 
 function drawBackdrop() {
-    fillRing(0, CONFIG.DANGER_DISTANCE_MM, CONFIG.C.dangerFill);
-    fillRing(CONFIG.DANGER_DISTANCE_MM, CONFIG.SAFE_DISTANCE_MM, CONFIG.C.safeFill);
+    fillRing(0, DANGER, hexToRgba(CLR.red, 0.06));
+    fillRing(DANGER, SAFE, hexToRgba(CLR.green, 0.03));
+    strokeRing(DANGER, hexToRgba(CLR.red, 0.30), 1, [4, 4]);
+    strokeRing(SAFE,   hexToRgba(CLR.green, 0.30), 1, [4, 4]);
+    strokeRing(MAX,    CLR.grid, 1, null);
 
-    strokeRing(CONFIG.DANGER_DISTANCE_MM, CONFIG.C.dangerLine, 1, [4, 4]);
-    strokeRing(CONFIG.SAFE_DISTANCE_MM,   CONFIG.C.safeLine,   1, [4, 4]);
-    strokeRing(CONFIG.MAX_DISTANCE_MM,    CONFIG.C.grid,       1, null);
-
-    ctx.fillStyle = CONFIG.C.text;
+    ctx.fillStyle = CLR.text;
     ctx.font = '9px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    CONFIG.GRID_STEPS.forEach(d => {
-        strokeRing(d, CONFIG.C.grid, 0.7);
+    for (const d of [1000, 2000, 3000, 4000]) {
+        strokeRing(d, CLR.grid, 0.7);
         ctx.fillText((d / 1000) + 'm', cx + toR(d) + 3, cy + 3);
-    });
+    }
 
-    ctx.strokeStyle = CONFIG.C.grid;
+    ctx.strokeStyle = CLR.grid;
     ctx.lineWidth = 0.5;
     ctx.font = '10px monospace';
     ctx.textAlign = 'center';
@@ -116,18 +126,18 @@ function drawBackdrop() {
 }
 
 function drawDirection() {
-    if (!cartCmd) return;
-    let dx = cartCmd.dx || 0, dy = cartCmd.dy || 0;
-    const total = Math.hypot(dx, dy);
-    if (total < 1) return;
-    const scale = Math.min(total, CONFIG.MAX_DISTANCE_MM) / CONFIG.MAX_DISTANCE_MM * r;
-    const nx = dy / total * scale;
-    const ny = -dx / total * scale;
-    const ex = cx + nx, ey = cy + ny;
+    const dx = isManualMode ? joystickCmd.dx : (cartCmd ? cartCmd.dx : 0);
+    const dy = isManualMode ? joystickCmd.dy : (cartCmd ? cartCmd.dy : 0);
+    const mag = Math.hypot(dx, dy);
+    if (mag < 1) return;
+    const scale = Math.min(mag, MAX) / MAX * r;
+    const ex = cx + dy / mag * scale;
+    const ey = cy - dx / mag * scale;
+    const base = isManualMode ? CLR.red : CLR.blue;
     const g = ctx.createLinearGradient(cx, cy, ex, ey);
     g.addColorStop(0, 'transparent');
-    g.addColorStop(0.7, 'rgba(0, 60, 80, 0.25)');
-    g.addColorStop(1, 'rgba(255, 70, 0, 0.9)');
+    g.addColorStop(0.7, hexToRgba(base, 0.25));
+    g.addColorStop(1, hexToRgba(base, 0.9));
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(ex, ey);
@@ -137,8 +147,10 @@ function drawDirection() {
 }
 
 function drawPoints() {
-    radarData.forEach(p => {
-        const pt = toCanvas(p.a, p.d);
+    const len = radarData.length;
+    for (let i = 0; i < len; i++) {
+        const p = radarData[i];
+        const pt = toCanvasRad(p.a, p.d);
         const color = getColor(p.d);
         ctx.beginPath();
         ctx.moveTo(cx, cy);
@@ -146,80 +158,61 @@ function drawPoints() {
         ctx.strokeStyle = hexToRgba(color, 0.10);
         ctx.lineWidth = 0.5;
         ctx.stroke();
-        ctx.save();
-        ctx.shadowBlur = 2;
-        ctx.shadowColor = hexToRgba(color, 0.5);
+        const rgba = hexToRgba(color, 0.5);
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 3, 0, 2 * Math.PI);
+        ctx.fillStyle = rgba;
+        ctx.fill();
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, 2, 0, 2 * Math.PI);
         ctx.fillStyle = color;
         ctx.fill();
-        ctx.restore();
-    });
+    }
 }
 
 function loop() {
-    try {
-        ctx.clearRect(0, 0, w, h);
-        drawBackdrop();
-        drawPoints();
-        drawDirection();
-    } catch (e) {
-        console.error('Render error:', e);
-    }
+    ctx.clearRect(0, 0, w, h);
+    drawBackdrop();
+    drawPoints();
+    drawDirection();
     requestAnimationFrame(loop);
 }
 
-// --- Connection health ---
-
 const els = {
-    status: document.querySelector('.status'),
+    status:     document.querySelector('.status'),
     statusText: document.getElementById('statusText'),
-    fpsText: document.getElementById('fpsText'),
-    temp: document.getElementById('tempDisplay'),
-    statNoise: document.getElementById('statNoise'),
+    fpsText:    document.getElementById('fpsText'),
+    temp:       document.getElementById('tempDisplay'),
+    statNoise:  document.getElementById('statNoise'),
     statDanger: document.getElementById('statDanger'),
-    statSafe: document.getElementById('statSafe'),
-    statTotal: document.getElementById('statTotal')
+    statSafe:   document.getElementById('statSafe'),
+    statTotal:  document.getElementById('statTotal')
 };
 
-let reconnectDelay = 1000;
-let reconnectTimer = null;
-let lastDataTime = 0;
-let staleNotified = false;
-let fpsTimestamps = [];
+let reconnectDelay = 1000, reconnectTimer = null;
+let lastDataTime = 0, staleNotified = false, fpsTimestamps = [];
 
 function updateFps() {
     const now = Date.now();
     lastDataTime = now;
-    if (staleNotified) {
-        staleNotified = false;
-        els.fpsText.style.color = '';
-    }
+    if (staleNotified) { staleNotified = false; els.fpsText.style.color = ''; }
     fpsTimestamps.push(now);
-    while (fpsTimestamps.length > 0 && now - fpsTimestamps[0] > 1000)
-        fpsTimestamps.shift();
+    while (fpsTimestamps.length > 0 && now - fpsTimestamps[0] > 1000) fpsTimestamps.shift();
     els.fpsText.textContent = fpsTimestamps.length + ' frame/s';
 }
 
 function checkStale() {
-    const now = Date.now();
-    while (fpsTimestamps.length > 0 && now - fpsTimestamps[0] > 1000)
-        fpsTimestamps.shift();
     if (!isConnected || lastDataTime === 0) return;
+    const now = Date.now();
+    while (fpsTimestamps.length > 0 && now - fpsTimestamps[0] > 1000) fpsTimestamps.shift();
     if (fpsTimestamps.length > 0) return;
-    const elapsed = now - lastDataTime;
-    if (elapsed > 600) {
-        if (!staleNotified) {
-            staleNotified = true;
-            els.fpsText.textContent = 'refreshing';
-            els.fpsText.style.color = '#ffaa00';
-        }
-        if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-    } else if (elapsed > 300 && !staleNotified) {
-        staleNotified = true;
-        els.fpsText.textContent = 'refreshing';
-        els.fpsText.style.color = '#ffaa00';
-    }
+    if (!staleNotified) { staleNotified = true; els.fpsText.textContent = 'refreshing'; els.fpsText.style.color = CLR.yellow; }
+    if (now - lastDataTime > 600 && ws && ws.readyState === WebSocket.OPEN) ws.close();
+}
+
+function setState(s) {
+    els.status.className = 'status ' + (s === 'error' ? 'error' : s === 'connected' ? 'connected' : 'connecting');
+    els.statusText.textContent = s === 'connected' ? '已连接' : s === 'error' ? '连接错误' : '连接中';
 }
 
 function connect() {
@@ -227,51 +220,32 @@ function connect() {
     setState('connecting');
     try {
         ws = new WebSocket(`ws://${location.hostname}:80/ws`);
-        ws.onopen = () => {
-            isConnected = true;
-            reconnectDelay = 1000;
-            setState('connected');
-        };
-        ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (err) { console.error('WS handle error:', err, e.data); } };
+        ws.onopen = () => { isConnected = true; reconnectDelay = 1000; setState('connected'); };
+        ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (_) {} };
         ws.onerror = () => setState('error');
         ws.onclose = () => {
-            isConnected = false;
-            ws = null;
-            lastDataTime = 0;
-            fpsTimestamps.length = 0;
+            isConnected = false; ws = null; lastDataTime = 0; fpsTimestamps.length = 0;
             setState('connecting');
-            reconnectTimer = setTimeout(() => {
-                reconnectDelay = Math.min(reconnectDelay * 2, 5000);
-                connect();
-            }, reconnectDelay);
+            reconnectTimer = setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 5000); connect(); }, reconnectDelay);
         };
-    } catch (_) { lastDataTime = 0; setState('connecting'); }
-}
-
-function setState(s) {
-    els.status.className = 'status ' + (s === 'error' ? 'error' : s === 'connected' ? 'connected' : 'connecting');
-    els.statusText.textContent = s === 'connected' ? '已连接'
-        : s === 'error' ? '连接错误' : '连接中';
+    } catch (_) { setState('connecting'); }
 }
 
 function handle(data) {
-    if (data.temp != null && !isNaN(data.temp))
-        els.temp.textContent = data.temp.toFixed(1) + ' °C';
-    if (data.cart)
-        cartCmd = data.cart;
-    const raw = data.vectors || [];
-    const filtered = [];
+    if (data.temp != null && !isNaN(data.temp)) {
+        const t = data.temp;
+        els.temp.textContent = t.toFixed(1) + ' °C';
+        els.temp.style.color = t < 30 ? CLR.green : t < 50 ? CLR.yellow : CLR.red;
+    }
+    if (data.cart) cartCmd = data.cart;
+    const raw = data.vectors || [], filtered = [];
     let noise = 0, danger = 0, safe = 0;
     for (let i = 0; i < raw.length; i++) {
         const d = raw[i].d;
-        if (d <= 0 || isNaN(d) || d > CONFIG.MAX_DISTANCE_MM) { noise++; continue; }
-        if (d < CONFIG.PERCEPTION_MIN || d > CONFIG.SAFE_DISTANCE_MM) {
-            noise++;
-        } else if (d <= CONFIG.DANGER_DISTANCE_MM) {
-            danger++;
-        } else {
-            safe++;
-        }
+        if (d <= 0 || isNaN(d) || MAX < d) { noise++; continue; }
+        if (d < PMIN || SAFE < d) noise++;
+        else if (d <= DANGER) danger++;
+        else safe++;
         filtered.push(raw[i]);
     }
     radarData = filtered;
@@ -282,8 +256,51 @@ function handle(data) {
     updateFps();
 }
 
+function updateJoystick(e) {
+    const B = canvas.getBoundingClientRect();
+    const rawDx = -(e.clientY - B.top - cy) / r * MAX;
+    const rawDy =  (e.clientX - B.left - cx) / r * MAX;
+    const dist = Math.hypot(rawDx, rawDy);
+    if (dist < MAX * DEAD_RATIO) { joystickCmd = { dx: 0, dy: 0 }; }
+    else { const s = dist > MAX ? MAX / dist : 1; joystickCmd = { dx: rawDx * s, dy: rawDy * s }; }
+    const now = Date.now();
+    if (now - lastSendMs < JS_SEND_MS) return;
+    lastSendMs = now;
+    sendCmdNow();
+}
+
 window.onload = function() {
     init();
     connect();
     setInterval(checkStale, 200);
+
+    document.getElementById('modeToggle').addEventListener('click', () => {
+        isManualMode = !isManualMode;
+        const btn = document.getElementById('modeToggle');
+        btn.textContent = isManualMode ? '手动' : '自动';
+        btn.classList.toggle('manual', isManualMode);
+        sendWs({ mode: isManualMode ? 'manual' : 'auto' });
+        if (!isManualMode) sendResetJoystick();
+    });
+
+    function onPointerDown(e) {
+        if (!isManualMode) return;
+        jsActive = true;
+        canvas.setPointerCapture(e.pointerId);
+        updateJoystick(e);
+    }
+    function onPointerMove(e) { if (isManualMode && jsActive) updateJoystick(e); }
+    function onPointerUp()    { if (isManualMode) sendResetJoystick(); }
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup',   onPointerUp);
+    canvas.addEventListener('pointercancel', onPointerUp);
+
+    canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    canvas.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
+
+    function onPageHide() { if (isManualMode) sendResetJoystick(); }
+    document.addEventListener('visibilitychange', onPageHide);
+    window.addEventListener('blur', onPageHide);
 };

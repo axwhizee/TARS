@@ -83,7 +83,7 @@ static inline void motor_apply_simple(float x, float y) {
 
     // 死区怠速
     if (fabsf(left) * 100.0f < 3.0f && fabsf(right) * 100.0f < 3.0f) {
-        motor_set(2, 2);
+        motor_set(0, 0);
         return;
     }
 
