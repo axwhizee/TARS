@@ -1,15 +1,13 @@
 /**
  * @file motor_task.c
- * @brief 电机控制任务: EMA 平滑 → 分类 → PWM → 换向死区
+ * @brief 电机控制任务: EMA 平滑 → 直接 dx/dy 差速映射 → PWM 输出
  *
- * 架构: motor_classify() 分离判定, motor_apply() 独立计算 PWM.
+ * 架构: dx=前进分量, dy=转向分量, 直接映射到左右轮.
+ *   propulsion = dx × scale(|dy|)      // |dy| 越大前进越慢, 避免转向过快导致雷达畸变
+ *   steering   = dy × STEER_GAIN       // 转向差速与 dy 成正比
+ *   left/right = propulsion ± steering
  *
- * 判定优先级 (从上到下):
- *   1. M_DEAD   | |x|<DEADZONE 且 |y|<DEADZONE    | L=R=2
- *   2. M_SPIN_L | |y| > 2*|x| (垂向主导)         | ang × 0.5 纯旋转
- *   3. M_SPIN   | -MAX/2 < x < 0 (弱后退)        | ang × 1.0 纯旋转
- *   4. M_REV    | -MAX < x < -MAX/2 (强后退)     | 反向 ang + 速度减半
- *   5. M_FWD    | 其余                            | L=lin-ang, R=lin+ang
+ * 优势: 无角度分解的非线性跳跃, 转向比例始终可预测, 调参直观
  */
 #include "tasks/motor_task.h"
 #include "drivers/drv8833.h"
@@ -54,42 +52,35 @@ static inline void ema_update(const vector_cart_t *cmd, motor_ema_t *ema) {
     ema->dy = fmaxf(-MOTOR_MAX_MM, fminf(MOTOR_MAX_MM, alpha * ema->target_y + alpha_inv * ema->dy));
 }
 
-// 统一公式差速 (动态转向系数)
+// 直接 dx/dy 差速映射
+// dx → 前进分量 (两侧同向), dy → 转向分量 (两侧反向)
+// dx-dy 耦合: |dy| 越大前进越低, 保证急转弯时降速
 static inline void diff_control(float x, float y) {
-    float lin = x / MOTOR_MAX_MM;
-    float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
+    float dx_u = x / MOTOR_MAX_MM;          // 归一化到 [-1, 1]
+    float dy_u = y / MOTOR_MAX_MM;
 
-    /**
-     * 动态转向增益：
-     * 与 lin 正相关，高速行进时转向更灵敏
-     * 与 ang 负相关，防止急转时转向过度
-     */
-    float gain = MOTOR_TURN_GAIN_MI +
-        MOTOR_TURN_GAIN_MX * fabsf(lin) * (1.0f - fabsf(ang));
-    ang *= gain;
-    if (lin < 0.0f) {
-        if (lin < -0.3f) {
-            ang += copysignf(0.1f, y);  // 对称破缺偏置
-        }
-        lin *= 0.4f;
-    }
+    // |dy| 越大, 前进分量衰减越多
+    float scale = 1.0f - fabsf(dy_u) * MOTOR_DX_COUPLING;
+    if (scale < 0.0f) scale = 0.0f;
 
-    float left  = lin - ang;
-    float right = lin + ang;
+    float propulsion = dx_u * scale;        // 动力: 被 dy 抑制的前进量
+    float steering   = dy_u * MOTOR_STEER_GAIN; // 转向: 直接反映 dy
 
-    // 比例限幅 (保持转向比)
+    float left  = propulsion + steering;
+    float right = propulsion - steering;
+
+    // 比例限幅 (保持左右转向比)
     float m = fmaxf(fabsf(left), fabsf(right));
     if (m > 1.0f) { left /= m; right /= m; }
 
-    // 死区怠速
-    if (fabsf(left) * 100.0f < 3.0f && fabsf(right) * 100.0f < 3.0f) {
+    // 死区
+    if (fabsf(left) < MOTOR_DEAD_ZONE && fabsf(right) < MOTOR_DEAD_ZONE) {
         motor_set(0, 0);
         return;
     }
 
-    int8_t l = (int8_t)roundf(left  * 100.0f);
-    int8_t r = (int8_t)roundf(right * 100.0f);
-    motor_set(l, r);
+    motor_set((int8_t)roundf(left  * 100.0f),
+              (int8_t)roundf(right * 100.0f));
 }
 
 void motor_task(void *pvParameters) {
@@ -98,27 +89,20 @@ void motor_task(void *pvParameters) {
     const TickType_t period = pdMS_TO_TICKS(1000 / MOTOR_FREQ_HZ);
     TickType_t last_wake = xTaskGetTickCount();
     motor_ema_t ema = {0};
-    ESP_LOGI(TAG, "Motor task started @ %dHz, alpha=%.2f (τ=%dms)",
-        MOTOR_FREQ_HZ, (float)MOTOR_EMA_ALPHA, MOTOR_EMA_TAU_MS);
+    ESP_LOGI(TAG, "Motor task started @ %dHz, alpha=%.2f coupling=%.2f steer_gain=%.2f",
+        MOTOR_FREQ_HZ, (float)MOTOR_EMA_ALPHA,
+        (float)MOTOR_DX_COUPLING, (float)MOTOR_STEER_GAIN);
     
     while (1) {
         vTaskDelayUntil(&last_wake, period);
 
-        vector_cart_t cmd = {0};
-        if (xQueueReceive(q_cart, &cmd, 0) != pdTRUE) cmd.dx = cmd.dy = 0;
-        ema_update(&cmd, &ema);
+        vector_cart_t cmd;
+        if (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) {
+            ema_update(&cmd, &ema);
+        } else {
+            ema_update(NULL, &ema);    // 队列空 → 保持当前目标, EMA 自然收敛
+        }
 
-        // 简化的x、y分量限幅
-        // if (cmd.dx > APF_RANGE_MAX || cmd.dy > APF_RANGE_MAX) {
-        //     if (cmd.dx > cmd.dy) {
-        //         cmd.dy *= APF_RANGE_MAX / cmd.dx;
-        //         cmd.dx = APF_RANGE_MAX;
-        //     } else {
-        //         cmd.dx *= APF_RANGE_MAX / cmd.dy;
-        //         cmd.dy = APF_RANGE_MAX;
-        //     }
-        // }
-        // 统一公式 (测试中)
         diff_control(ema.dx, ema.dy);
     }
 }

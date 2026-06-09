@@ -38,6 +38,9 @@
 
 static const char *TAG = "MAIN";
 
+// APF+VFH 可调参数 (由 sys_init.c NVS 加载, web_task.c 写入)
+apf_params_t g_apf_params;
+
 // 全局 RTOS 通信对象 (定义在此, extern 供所有任务引用)
 
 QueueHandle_t        q_polar;   // LD14P + 火焰传感器极坐标数据
@@ -52,6 +55,7 @@ void app_main(void) {
     // 1. 系统（NVS、SPIFFS、Wi-Fi AP）初始化
 
     if (sys_nvs_init()    != ESP_OK) { ESP_LOGE(TAG, "NVS init failed"); return; }
+    params_init_defaults();
     if (sys_spiffs_init() != ESP_OK) { ESP_LOGE(TAG, "SPIFFS init failed"); return; }
     if (sys_wifi_init()   != ESP_OK) { ESP_LOGE(TAG, "Wi-Fi init failed"); return; }
 

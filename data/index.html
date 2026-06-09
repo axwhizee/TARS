@@ -20,6 +20,33 @@
     <main>
         <canvas id="radar-canvas"></canvas>
         <button id="modeToggle" class="mode-btn">手动</button>
+        <div id="configPanel" class="config-panel" style="display:none">
+            <div class="config-body">
+                <div class="config-col">
+                    <h3>APF 斥力</h3>
+                    <label>range_rep <input type="number" id="p_range_rep" step="0.01"></label>
+                    <label>gain_rep_x <input type="number" id="p_gain_rep_x" step="0.01"></label>
+                    <label>gain_rep_y <input type="number" id="p_gain_rep_y" step="0.01"></label>
+                    <label>rep_nx <input type="number" id="p_rep_nx" step="0.01"></label>
+                    <label>rep_ny <input type="number" id="p_rep_ny" step="0.01"></label>
+                    <label>att_base <input type="number" id="p_att_base" step="0.01"></label>
+                </div>
+                <div class="config-col">
+                    <h3>VFH 直方图</h3>
+                    <label>vfh_thresh <input type="number" id="p_vfh_thresh" step="0.01"></label>
+                    <label>vfh_min_w <input type="number" id="p_vfh_min_w" step="1"></label>
+                    <label>vfh_smooth_w <input type="number" id="p_vfh_smooth_w" step="0.01"></label>
+                    <label>vfh_free_th <input type="number" id="p_vfh_free_th" step="0.01"></label>
+                    <label>vfh_goal_bias <input type="number" id="p_vfh_goal_bias" step="0.01"></label>
+                    <label>vfh_ema_alpha <input type="number" id="p_vfh_ema_alpha" step="0.01"></label>
+                </div>
+            </div>
+            <div class="config-footer">
+                <button id="configApply" class="config-apply">应用</button>
+                <button id="configReset" class="config-reset">重置</button>
+                <button id="configExit" class="config-exit">退出</button>
+            </div>
+        </div>
         <div class="overlay temp-overlay">
             <div class="label">核心温度</div>
             <div class="value" id="tempDisplay">-- °C</div>

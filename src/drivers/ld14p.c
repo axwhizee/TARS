@@ -2,7 +2,7 @@
  * @file ld14p.c
  * @brief LD14P 激光雷达底层驱动
  *
- * cloud_360[LD14P_POINTS_PER_REV] 持久化, 每圈自然覆盖不主动清零, distance==0 标记无效点.
+ * cloud_360[LD14P_POINTS_ALL] 持久化, 每圈自然覆盖不主动清零, distance==0 标记无效点.
  * 圈检测用帧末点角度 (借鉴官方 SDK), 配合 150ms 防抖.
  */
 #include "drivers/ld14p.h"
@@ -23,7 +23,7 @@
 
 static const char *TAG = "LD14P ";
 
-static vector_polar_t cloud_360[LD14P_POINTS_PER_REV];
+static vector_polar_t cloud_360[LD14P_POINTS_ALL];
 static float prev_last_deg;       // 上一帧末点角度, 用于跨零检测
 static uint32_t rev_last_tick;
 static bool rev_ready;
@@ -104,17 +104,17 @@ const vector_polar_t *ld14p_collect(const ld14p_frame_t *frm) {
     // 12 点在 start_angle~end_angle 间等间隔插值
     int diff = (int)frm->end_angle - (int)frm->start_angle;
     if (diff < 0) diff += 360 * ANGLE_RES;  // 跨 0° 补偿
-    float step_raw = (float)diff / (LD14P_POINTS_PER_PACK - 1);
+    float step_raw = (float)diff / (LD14P_POINTS_FRAME - 1);
 
     float last_deg = 0.0f;
-    for (int i = 0; i < LD14P_POINTS_PER_PACK; i++) {
+    for (int i = 0; i < LD14P_POINTS_FRAME; i++) {
         int raw_angle = (int)frm->start_angle + (int)(i * step_raw);
-        int deg = (raw_angle / ANGLE_RES) % LD14P_POINTS_PER_REV;
+        int deg = (raw_angle / ANGLE_RES) % LD14P_POINTS_ALL;
         float angle_f = (float)raw_angle / ANGLE_RES;
 
         cloud_360[deg].angle = angle_f;
         cloud_360[deg].distance = (float)frm->points[i].distance;
-        if (i == LD14P_POINTS_PER_PACK - 1) last_deg = angle_f;
+        if (i == LD14P_POINTS_FRAME - 1) last_deg = angle_f;
     }
 
     // 圈检测: 末点角度跨过 0° 线 (prev>340 且 current<20)
@@ -144,7 +144,7 @@ void ld14p_calibrate(vector_polar_t *points, float offset_x, float offset_y) {
      */
     static float last_shift = 0.0f;
 
-    for (uint16_t i = 0; i < LD14P_POINTS_PER_REV; i++) {
+    for (uint16_t i = 0; i < LD14P_POINTS_ALL; i++) {
         float dist = points[i].distance;
         float angle = points[i].angle;
         float shift;

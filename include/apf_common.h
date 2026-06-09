@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define DEG_2_RAD (float)(2.0f * 3.1416f / 360.0f)
+
 // WiFi 与全局配置
 
 #define WIFI_SSID           "TARS"   // 未加密的开发 AP
@@ -39,7 +41,8 @@ extern QueueHandle_t        q_cart;     // APF 计算结果队列，深度 1
 extern QueueHandle_t        q_temp;     // DS18B20 温度数据队列
 extern QueueHandle_t        q_log;      // 日志上传数据队列 (透传 vector_polar_t)
 extern EventGroupHandle_t   eg_sync;    // 传感器同步事件组
-extern vector_cart_t        g_cart_cmd; // 最新 APF 合力指令 (web_task 绕过争用直接读)
+extern vector_cart_t        g_cart_rep; // APF 斥力分量 (web 可视化)
+extern vector_cart_t        g_cart_att; // VFH 引力分量 (web 可视化)
 
 // 任务间同步事件组
 
@@ -99,62 +102,77 @@ DS18B20_PIN         9   // TEMP-DQ
 
 // LD14P 配置
 
-#define LD14P_POINTS_PER_PACK   12          // 每个雷达数据帧包含的点数量
-#define LD14P_POINTS_PER_REV    360         // 雷达完整一周的点云数量
-#define LIDAR_SECTORS           72          // 降采样后的点数，请确保该值是360的因数
-#define LIDAR_MIN_WEIGHT        2 - 1       // 区间最小值权重，在降采样时对区间最小值会加权
-#define LD14P_UART_NUM          UART_NUM_1  // 通信串口
-#define LD14P_UART_BAUD         115200      // 波特率
-#define LD14P_UART_RX_BUF       2048        // 接收缓冲区大小
+#define LD14P_UART_NUM      UART_NUM_1  // 通信串口
+#define LD14P_UART_RX_BUF   2048    // 接收缓冲区大小
+#define LD14P_UART_BAUD     115200  // 波特率
+#define LD14P_POINTS_FRAME  12      // 每个雷达数据帧包含的点数量
+#define LD14P_POINTS_ALL    360     // 雷达完整一周的点云数量
+#define LIDAR_SECTORS       72      // 降采样后的点数，请确保该值是360的因数
+#define LIDAR_MIN_WEIGHT    2 - 1   // 区间最小值权重，在降采样时对区间最小值会加权
 
 // 火焰传感器配置
 
-#define FLAME_SENSOR_COUNT      5       // 火焰传感器路数
-#define FLAME_DETECT_MM         500.0f  // 火焰信号转换的距离
+#define FLAME_SENSOR_COUNT  5       // 火焰传感器路数
+#define FLAME_DETECT_MM     500.0f  // 火焰信号转换的距离
 
 // DS18B20 温度传感器配置
 
 #define DS18B20_RES_BITS    10  // 10-bit 精度 (0.25°C, 188ms 转换), 支持 4Hz
 
 // APF 人工势场法参数，距离单位统一为 mm
-// 引力方向由 VFH 算法动态选择, 幅值随通道宽度缩放
 
 #define Q_POLAR_DEPTH   (LIDAR_SECTORS + FLAME_SENSOR_COUNT)    // 传感器数据统一队列
 #define APF_RANGE_MAX   4000.0f     // 最大感知范围，超出视为噪声
 #define APF_RANGE_REP   800.0f      // 斥力归一化锚点 (r = r_ref 时力 = K)
 #define APF_RANGE_MIN   100.0f      // 死区距离 (避免 1/0 发散)
-#define APF_GAIN_REP_X  80.0f       // 斥力 X 增益
+#define APF_GAIN_REP_X  200.0f      // 斥力 X 增益
 #define APF_GAIN_REP_Y  100.0f      // 斥力 Y 增益 (r = r_ref 处的转向分量)
-#define APF_REP_NX      1.6f        // X 衰减指数 (1/r^n, 越大近距离制动越猛)
-#define APF_REP_NY      1.0f        // Y 衰减指数 (1/r^n, 越小远距离转向越灵敏)
-#define APF_ATT_BASE    200.0f      // VFH 引力基础增益 (× 通道宽度缩放)
+#define APF_REP_NX      0.4f        // X 衰减指数 (1/r^n, 越大近距离制动越猛)
+#define APF_REP_NY      1.6f        // Y 衰减指数 (1/r^n, 越小远距离 转向越灵敏)
+#define APF_ATT_BASE    2000.0f     // VFH 引力基础增益 (× 通道宽度缩放)
 
 // VFH (Vector Field Histogram) 参数
 
-#define VFH_BINS            LIDAR_SECTORS               // 72 bins, 5°/bin
-#define VFH_THRESH_MM       1200.0f                     // 障碍判定阈值 (<此值视为不可通行)
-#define VFH_MIN_WIDTH       4                           // 最小有效通道宽度 (4 bins ≈ 20°)
-#define VFH_SMOOTH_W        1.5f                        // 直方图平滑权重 (3点加权移动平均)
-#define VFH_IS_FREE_TH      0.25f                       // 平滑直方图低于此值视为可通行
-#define VFH_GOAL_BIAS       0.15f                       // 正前方偏好 (0=无偏好, 1=强偏好)
-#define VFH_EMA_ALPHA       0.8f                        // 角度 EMA 平滑 (0=纯惯性, 1=无平滑)
+#define VFH_BINS    LIDAR_SECTORS   // 72 bins, 5°/bin
+#define VFH_THRESH_MM   1200.0f     // 障碍判定阈值 (<此值视为不可通行)
+#define VFH_MIN_WIDTH   4           // 最小有效通道宽度 (4 bins ≈ 20°)
+#define VFH_SMOOTH_W    1.5f        // 直方图平滑权重 (3点加权移动平均)
+#define VFH_IS_FREE_TH  0.25f       // 平滑直方图低于此值视为可通行
+#define VFH_GOAL_BIAS   0.20f       // 正前方偏好 (0=无偏好, 1=强偏好)
+#define VFH_EMA_ALPHA   0.6f        // 角度 EMA 平滑 (0=纯惯性, 1=无平滑)
+
+// APF+VFH 可调参数结构体 (运行时由 ws_handler 修改, NVS 持久化)
+// APF_RANGE_MAX / APF_RANGE_MIN 为安全边界, 不参与热调
+
+typedef struct {
+    float range_rep;        // APF_RANGE_REP
+    float gain_rep_x;       // APF_GAIN_REP_X
+    float gain_rep_y;       // APF_GAIN_REP_Y
+    float rep_nx;           // APF_REP_NX
+    float rep_ny;           // APF_REP_NY
+    float att_base;         // APF_ATT_BASE
+    float vfh_thresh;       // VFH_THRESH_MM
+    int   vfh_min_w;        // VFH_MIN_WIDTH (int)
+    float vfh_smooth_w;     // VFH_SMOOTH_W
+    float vfh_free_th;      // VFH_IS_FREE_TH
+    float vfh_goal_bias;    // VFH_GOAL_BIAS
+    float vfh_ema_alpha;    // VFH_EMA_ALPHA
+} apf_params_t;
+
+extern apf_params_t g_apf_params;
 
 // 电机驱动配置
 
-#define MOTOR_PWM_FREQ      20000       // PWM 频率 20kHz
-#define MOTOR_PWM_RES_BITS  10          // 定时器计数器位数（分辨率）
+#define MOTOR_PWM_FREQ      20000   // PWM 频率 20kHz
+#define MOTOR_PWM_RES_BITS  10      // 定时器计数器位数（分辨率）
 #define MOTOR_MAX_COUNT     ((1U << MOTOR_PWM_RES_BITS) - 1)    // 计数器大小（2^BITS - 1）
-#define MOTOR_MIN_DUTY      75          // 能克服电机静摩擦力的最低有效占空比，需根据实测情况设置
+#define MOTOR_MIN_DUTY      75      // 能克服电机静摩擦力的最低有效占空比，需根据实测情况设置
 #define MOTOR_MIN_COUNT     (MOTOR_MAX_COUNT * MOTOR_MIN_DUTY / 100U)    // 占空比对应的计数器值
 
 #define MOTOR_FREQ_HZ       SENSOR_FREQ * 2     // 电机控制任务频率，为传感器工作频率的两倍
-#define MOTOR_EMA_TAU_MS    50          // EMA时间常数 τ (ms), 控制平滑收敛速度
-// α = 1 - exp(-dt/τ),  dt = 1000/MOTOR_FREQ_HZ,  τ = MOTOR_EMA_TAU_MS
-// α 越大响应越快 (τ 越小时 α 越接近 1)
-#define MOTOR_EMA_ALPHA     (1.0f - expf(-(float)(1000 / MOTOR_FREQ_HZ) / MOTOR_EMA_TAU_MS))
-#define MOTOR_MAX_MM        APF_RANGE_MAX       // 输出幅值上限，用于向量归一化，影响平均速度
+#define MOTOR_MAX_MM        APF_RANGE_MAX   // 输出幅值上限，用于向量归一化，影响平均速度
+#define MOTOR_EMA_ALPHA     0.90f   // α 越大响应越快，取 1 时无平滑效果
 #define MOTOR_TIMEOUT_MS    1000    // 指令超时阈值，超时停车
-#define MOTOR_DEADZONE_MM   80.0f   // 笛卡控制尔死区
-#define MOTOR_TURN_RATIO    0.20f   // 差速控制中角分量的基础灵敏度系数
-#define MOTOR_TURN_GAIN_MI  0.20f   // 差速控制中角分量的动态灵敏度下限
-#define MOTOR_TURN_GAIN_MX  2.40f - MOTOR_TURN_GAIN_MI  // 差速控制中角分量的动态灵敏度上限
+#define MOTOR_DX_COUPLING   0.80f   // dx-dy 耦合系数: |dy|越大前进分量越低
+#define MOTOR_STEER_GAIN    0.05f   // dy → 差速转向增益 (归一化后映射)
+#define MOTOR_DEAD_ZONE     0.03f   // 死区阈值 (归一化 [-1,1])

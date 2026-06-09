@@ -12,7 +12,7 @@ const CLR = {
     grid:   'rgba(200,200,220,0.15)',
 };
 
-let radarData = [], cartCmd = null;
+let radarData = [], cartRep = null, cartAtt = null;
 let ws = null, isConnected = false;
 let canvas, ctx, w, h, cx, cy, r;
 
@@ -44,7 +44,7 @@ function sendWs(data) {
 function sendCmdNow() {
     const c = { dx: joystickCmd.dx, dy: joystickCmd.dy };
     if (c.dx < 0) c.dy = -c.dy;
-    sendWs({ cmd: c });
+    sendWs({ action: 'cmd', dx: c.dx, dy: c.dy });
 }
 
 function sendResetJoystick() {
@@ -125,25 +125,34 @@ function drawBackdrop() {
     }
 }
 
-function drawDirection() {
-    const dx = isManualMode ? joystickCmd.dx : (cartCmd ? cartCmd.dx : 0);
-    const dy = isManualMode ? joystickCmd.dy : (cartCmd ? cartCmd.dy : 0);
+function drawVector(dx, dy, color, width, alpha) {
     const mag = Math.hypot(dx, dy);
     if (mag < 1) return;
     const scale = Math.min(mag, MAX) / MAX * r;
     const ex = cx + dy / mag * scale;
     const ey = cy - dx / mag * scale;
-    const base = isManualMode ? CLR.red : CLR.blue;
     const g = ctx.createLinearGradient(cx, cy, ex, ey);
     g.addColorStop(0, 'transparent');
-    g.addColorStop(0.7, hexToRgba(base, 0.25));
-    g.addColorStop(1, hexToRgba(base, 0.9));
+    g.addColorStop(0.7, hexToRgba(color, alpha * 0.25));
+    g.addColorStop(1, hexToRgba(color, alpha * 0.9));
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(ex, ey);
     ctx.strokeStyle = g;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = width;
     ctx.stroke();
+}
+
+function drawDirection() {
+    // APF 斥力 (red) + VFH 引力 (blue) — 两种模式均显示
+    if (cartRep) drawVector(cartRep.dx, cartRep.dy, CLR.red,   3, 0.8);
+    if (cartAtt) drawVector(cartAtt.dx, cartAtt.dy, CLR.blue,  3, 0.8);
+    // cmd (yellow): manual → 摇杆指令, auto → rep + att
+    const dx = isManualMode ? joystickCmd.dx
+              : (cartRep && cartAtt ? cartRep.dx + cartAtt.dx : 0);
+    const dy = isManualMode ? joystickCmd.dy
+              : (cartRep && cartAtt ? cartRep.dy + cartAtt.dy : 0);
+    drawVector(dx, dy, CLR.yellow, 3, 0.8);
 }
 
 function drawPoints() {
@@ -220,7 +229,7 @@ function connect() {
     setState('connecting');
     try {
         ws = new WebSocket(`ws://${location.hostname}:80/ws`);
-        ws.onopen = () => { isConnected = true; reconnectDelay = 1000; setState('connected'); sendWs({ mode: 'manual' }); };
+        ws.onopen = () => { isConnected = true; reconnectDelay = 1000; setState('connected'); sendWs({ action: 'set_mode', mode: 'manual' }); };
         ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (_) {} };
         ws.onerror = () => setState('error');
         ws.onclose = () => {
@@ -232,13 +241,34 @@ function connect() {
 }
 
 function handle(data) {
+    // 事件帧: mode_changed
+    if (data.action === 'mode_changed') {
+        isManualMode = data.mode === 'manual';
+        const btn = document.getElementById('modeToggle');
+        btn.textContent = isManualMode ? '手动' : '自动';
+        btn.classList.toggle('manual', isManualMode);
+        return;
+    }
+
+    // 事件帧: params (get_params / update_params / reset_params 的回复)
+    if (data.action === 'params' && data.params) {
+        const p = data.params;
+        for (const [k, v] of Object.entries(p)) {
+            const el = document.getElementById('p_' + k);
+            if (el) el.value = v;
+        }
+        return;
+    }
+
+    // 周期帧: telemetry
     if (data.temp != null && !isNaN(data.temp)) {
         const t = data.temp;
         els.temp.textContent = t.toFixed(1) + ' °C';
         els.temp.style.color = t < 30 ? CLR.green : t < 50 ? CLR.yellow : CLR.red;
     }
-    if (data.cart) cartCmd = data.cart;
-    const raw = data.vectors || [], filtered = [];
+    if (data.v_apf) cartRep = data.v_apf;
+    if (data.v_vfh) cartAtt = data.v_vfh;
+    const raw = data.v_polars || [], filtered = [];
     let noise = 0, danger = 0, safe = 0;
     for (let i = 0; i < raw.length; i++) {
         const d = raw[i].d;
@@ -276,13 +306,31 @@ window.onload = function() {
 
     document.getElementById('modeToggle').addEventListener('click', () => {
         isManualMode = !isManualMode;
-        const btn = document.getElementById('modeToggle');
-        btn.textContent = isManualMode ? '手动' : '自动';
-        btn.classList.toggle('manual', isManualMode);
-        sendWs({ mode: isManualMode ? 'manual' : 'auto' });
+        sendWs({ action: 'set_mode', mode: isManualMode ? 'manual' : 'auto' });
         if (!isManualMode) sendResetJoystick();
     });
     document.getElementById('modeToggle').classList.add('manual');
+
+    // 配置面板: header 点击打开, 退出按钮关闭
+    document.querySelector('header').addEventListener('click', () => {
+        if (!isManualMode) return;
+        document.getElementById('configPanel').style.display = '';
+        sendWs({ action: 'get_params' });
+    });
+    document.getElementById('configExit').addEventListener('click', () => {
+        document.getElementById('configPanel').style.display = 'none';
+    });
+    document.getElementById('configApply').addEventListener('click', () => {
+        const params = {};
+        document.querySelectorAll('.config-body input').forEach(el => {
+            const key = el.id.replace('p_', '');
+            params[key] = el.step === '1' ? parseInt(el.value) : parseFloat(el.value);
+        });
+        sendWs({ action: 'update_params', params: params });
+    });
+    document.getElementById('configReset').addEventListener('click', () => {
+        sendWs({ action: 'reset_params' });
+    });
 
     function onPointerDown(e) {
         if (!isManualMode) return;
