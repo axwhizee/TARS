@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>APF-Ridar Viewer</title>
+    <title>TARS-Console</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header>
-        <div class="brand">APF-Ridar Viewer</div>
-        <button id="modeToggle" class="mode-btn">自动</button>
+        <div class="brand">TARS-Console</div>
         <div class="right-info">
             <div class="status disconnected">
                 <span class="dot"></span>
@@ -20,6 +19,7 @@
     </header>
     <main>
         <canvas id="radar-canvas"></canvas>
+        <button id="modeToggle" class="mode-btn">手动</button>
         <div class="overlay temp-overlay">
             <div class="label">核心温度</div>
             <div class="value" id="tempDisplay">-- °C</div>

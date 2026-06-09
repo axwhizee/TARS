@@ -5,7 +5,7 @@
  * 启动流程:
  *   1. sys_nvs_init()       — NVS flash 存储
  *   2. sys_spiffs_init()    — SPIFFS 挂载 (网页文件)
- *   3. sys_wifi_init()      — Wi-Fi AP 启动 (192.168.1.1:80)
+ *   3. sys_wifi_init()      — Wi-Fi AP 启动 (WEB_ADDR:80)
  *   4. 硬件驱动初始化        — LD14P, DRV8833, DS18B20, Flame
  *   5. 队列 + 事件组创建     — RTOS IPC 基础设施
  *   6. xTaskCreatePinnedToCore ×7 — 双核分工
@@ -49,7 +49,7 @@ EventGroupHandle_t   eg_sync;   // 传感器就绪 + 日志就绪事件组
 void app_main(void) {
     ESP_LOGI(TAG, "\nSystem Initializing...\n");
 
-    // 1. 系统级初始化 — NVS → SPIFFS → Wi-Fi AP
+    // 1. 系统（NVS、SPIFFS、Wi-Fi AP）初始化
 
     if (sys_nvs_init()    != ESP_OK) { ESP_LOGE(TAG, "NVS init failed"); return; }
     if (sys_spiffs_init() != ESP_OK) { ESP_LOGE(TAG, "SPIFFS init failed"); return; }
@@ -85,13 +85,14 @@ void app_main(void) {
     //  xTaskCreatePinnedToCore(func, name, stack, param, prio, handle, core)
 
     motor_set(0, 0);
-    xTaskCreatePinnedToCore(sysmon_task,"sysmon",   4096, NULL, 1, NULL, 1);    // Core1 心跳+统计
-    xTaskCreatePinnedToCore(flame_task, "flame",    2048, NULL, 7, NULL, 1);    // Core1
+    xEventGroupSetBits(eg_sync, BIT_MANUAL_MODE);   // 初始状态设置为手动模式，需要手动切换
+    xTaskCreatePinnedToCore(flame_task, "flame",    3072, NULL, 7, NULL, 1);    // Core1
     xTaskCreatePinnedToCore(temp_task,  "temp",     4096, NULL, 6, NULL, 1);    // Core1
     xTaskCreatePinnedToCore(ld14p_task, "ld14p",    8192, NULL, 5, NULL, 1);    // Core1
     xTaskCreatePinnedToCore(apf_task,   "apf",      4096, NULL, 4, NULL, 1);    // Core1
-    xTaskCreatePinnedToCore(motor_task, "motor",    4096, NULL, 8, NULL, 1);    // Core1
+    xTaskCreatePinnedToCore(motor_task, "motor",    8192, NULL, 8, NULL, 1);    // Core1
     xTaskCreatePinnedToCore(web_task,   "web_task", 8192, NULL, 3, NULL, 0);    // Core0 网络专用
+    xTaskCreatePinnedToCore(sysmon_task,"sysmon",   4096, NULL, 1, NULL, 1);    // Core1 心跳+统计
     vTaskDelay(pdMS_TO_TICKS(1000));    // 1s 缓冲
 
     ESP_LOGI(TAG, "App_main done, scheduler starting...\n");

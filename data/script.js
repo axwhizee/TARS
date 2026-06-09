@@ -16,7 +16,7 @@ let radarData = [], cartCmd = null;
 let ws = null, isConnected = false;
 let canvas, ctx, w, h, cx, cy, r;
 
-let isManualMode = false, jsActive = false;
+let isManualMode = true, jsActive = false;
 let joystickCmd = { dx: 0, dy: 0 }, lastSendMs = 0;
 
 function hexToRgba(hex, a) {
@@ -220,7 +220,7 @@ function connect() {
     setState('connecting');
     try {
         ws = new WebSocket(`ws://${location.hostname}:80/ws`);
-        ws.onopen = () => { isConnected = true; reconnectDelay = 1000; setState('connected'); };
+        ws.onopen = () => { isConnected = true; reconnectDelay = 1000; setState('connected'); sendWs({ mode: 'manual' }); };
         ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (_) {} };
         ws.onerror = () => setState('error');
         ws.onclose = () => {
@@ -282,6 +282,7 @@ window.onload = function() {
         sendWs({ mode: isManualMode ? 'manual' : 'auto' });
         if (!isManualMode) sendResetJoystick();
     });
+    document.getElementById('modeToggle').classList.add('manual');
 
     function onPointerDown(e) {
         if (!isManualMode) return;

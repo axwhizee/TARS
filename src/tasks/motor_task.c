@@ -32,7 +32,7 @@ typedef struct {
  * @brief 标准一阶低通滤波 + 超时归零 + 幅值钳位
  * 公式: y[n] = α*x[n] + (1-alpha)*y[n-1]
  */
-static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) {
+static inline void ema_update(const vector_cart_t *cmd, motor_ema_t *ema) {
     const float alpha = MOTOR_EMA_ALPHA;
     const float alpha_inv = 1.0f - alpha;
     TickType_t now = xTaskGetTickCount();
@@ -55,7 +55,7 @@ static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) 
 }
 
 // 统一公式差速 (动态转向系数)
-static inline void motor_apply_simple(float x, float y) {
+static inline void diff_control(float x, float y) {
     float lin = x / MOTOR_MAX_MM;
     float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
 
@@ -92,7 +92,6 @@ static inline void motor_apply_simple(float x, float y) {
     motor_set(l, r);
 }
 
-// 任务入口
 void motor_task(void *pvParameters) {
     (void)pvParameters;
     
@@ -105,11 +104,21 @@ void motor_task(void *pvParameters) {
     while (1) {
         vTaskDelayUntil(&last_wake, period);
 
-        vector_cart_t cmd;
-        const vector_cart_t *pcmd = (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) ? &cmd : NULL;
-        motor_ema_update(pcmd, &ema);
+        vector_cart_t cmd = {0};
+        if (xQueueReceive(q_cart, &cmd, 0) != pdTRUE) cmd.dx = cmd.dy = 0;
+        ema_update(&cmd, &ema);
 
-        // --- 统一公式 (测试中) ---
-        motor_apply_simple(ema.dx, ema.dy);
+        // 简化的x、y分量限幅
+        // if (cmd.dx > APF_RANGE_MAX || cmd.dy > APF_RANGE_MAX) {
+        //     if (cmd.dx > cmd.dy) {
+        //         cmd.dy *= APF_RANGE_MAX / cmd.dx;
+        //         cmd.dx = APF_RANGE_MAX;
+        //     } else {
+        //         cmd.dx *= APF_RANGE_MAX / cmd.dy;
+        //         cmd.dy = APF_RANGE_MAX;
+        //     }
+        // }
+        // 统一公式 (测试中)
+        diff_control(ema.dx, ema.dy);
     }
 }

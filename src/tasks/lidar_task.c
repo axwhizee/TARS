@@ -86,7 +86,7 @@ void ld14p_task(void *pvParameters) {
                 // 降采样 + 有效点统计
                 uint16_t valid = 0;
                 const vector_polar_t *sectors = lidar_process(cloud_copy, &valid);
-                ESP_LOGI(TAG, "REV: %lu / %d valid → %d sectors",
+                ESP_LOGI(TAG, "REV: %lu / %d valid (%d s)",
                     valid, LD14P_POINTS_PER_REV, LIDAR_SECTORS);
 
                 // q_polar 被占时跳过, 每 16 跳告警一次

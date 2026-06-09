@@ -1,6 +1,6 @@
-# ESP32 Fire-Fighting Robot — RTOS Sensor Fusion & APF Navigation
+# ESP32 Fire-Fighting Robot — RTOS Sensor Fusion & APF+VFH Navigation
 
-基于 ESP32-S3 的智能消防巡检机器人嵌入式系统。多源异构传感器（LiDAR + 红外火焰 + 温度）通过 FreeRTOS 事件组同步融合，经嵌入式人工势场法 (APF) 实时解算避障指令，并通过板载 Web 页面 + WebSocket 提供雷达可视化。
+基于 ESP32-S3 的智能消防巡检机器人嵌入式系统。多源异构传感器（LiDAR + 红外火焰 + 温度）通过 FreeRTOS 事件组同步融合，经人工势场法 (APF) 斥力 + 360° VFH 方向选择实时解算避障指令，并通过板载 Web 页面 + WebSocket 提供雷达可视化。
 
 ## 硬件平台
 
@@ -12,7 +12,9 @@
 | 温度传感器 | ESP32-S3 内置 (原 DS18B20 已弃用) | 内部温度传感器 API |
 | 电机驱动 | DRV8833 ×2 | A: GPIO5/6, B: GPIO7/15, LEDC PWM 20kHz |
 | 心跳 LED | 板载 | GPIO48 |
-| 通信 | Wi-Fi AP (APF-NVC, 无密码) | IP 192.168.1.1, HTTP Port 80 |
+| 通信 | Wi-Fi AP (TARS, 无密码) | IP 192.168.10.1, HTTP Port 80 |
+
+> 小车速度大致在150mm/250ms，即600mm/s，意味着如果以250ms为控制周期，结合激光雷达的误差问题，应当将约400mm距离的障碍物视作危险障碍
 
 ## 项目结构
 
@@ -54,7 +56,7 @@ ESP32_Template/
 |---|---|---|---|---|
 | `sysmon` | 1 | 2048 | 1Hz | 心跳 LED + 运行时统计 |
 | `web_task` | 3 | 8192 | 事件驱动 | HTTP/WS 服务器 + JSON 推送 + 手动遥控 |
-| `apf` | 4 | 4096 | 4Hz | APF 解算 (自动) / 透传雷达 (手动) |
+| `apf` | 4 | 4096 | 4Hz | APF 斥力 + VFH 方向选择 (自动) / 透传雷达 (手动) |
 | `ld14p` | 5 | 8192 | 事件驱动 | UART 读帧, CRC8, 360→72 降采样 |
 | `temp` | 6 | 4096 | 4Hz | ESP32-S3 内置温度传感器 |
 | `flame` | 7 | 2048 | 4Hz | 5 路红外火焰状态检测 |
@@ -66,7 +68,7 @@ ESP32_Template/
 
 | 队列 | 深度 | 元素类型 | 生产者 → 消费者 |
 |---|---|---|---|
-| `q_polar` | 77 | `vector_polar_t` | LiDAR(72) + Flame(5) → APF |
+| `q_polar` | 77 | `vector_polar_t` | LiDAR(72) + Flame(5) → APF+VFH |
 | `q_cart` | 1 | `vector_cart_t` | APF/ws_handler → Motor (xQueueOverwrite) |
 | `q_temp` | 4 | `float` | temp_task → web_task |
 | `q_log` | 77 | `vector_polar_t` | APF → web_task |
@@ -79,7 +81,7 @@ ESP32_Template/
 | `BIT_TEMP_Q_READY` | temp_task | web_task | q_temp 有新温度数据 |
 | `BIT_FLAME_Q_READY` | flame_task | apf_task | q_polar 有新火焰数据 |
 | `BIT_LOG_Q_READY` | apf_task | web_task | q_log 有新一帧日志数据 |
-| `BIT_MANUAL_MODE` | web_task | web_task | 0=自动(APF), 1=手动(前端摇杆) |
+| `BIT_MANUAL_MODE` | web_task | web_task | 0=自动(APF+VFH), 1=手动(前端摇杆) |
 
 ## 系统四层框图
 
@@ -92,7 +94,7 @@ graph TB
     end
 
     subgraph Fusion["融合决策层 (Fusion & Decision Layer)"]
-        APF["人工势场法 (APF)<br/>77维向量势场解算<br/>拆分斥力剖面 + 间隙跟随"]
+        APF["APF 斥力 + VFH 方向选择<br/>360° 全向直方图扫描<br/>角度 EMA 平滑 + 宽度评分"]
         SYNC["事件组同步<br/>eg_sync: 双位原子性等待<br/>260ms 超时保护"]
     end
 
@@ -103,7 +105,7 @@ graph TB
     end
 
     subgraph Comm["通信层 (Communication Layer)"]
-        AP["Wi-Fi AP<br/>SSID: APF-NVC<br/>192.168.1.1:80"]
+        AP["Wi-Fi AP<br/>SSID: TARS<br/>192.168.10.1:80"]
         WS["WebSocket /ws<br/>JSON 实时推送"]
         HTTP["HTTP 静态文件服务<br/>SPIFFS /spiffs"]
         BROWSER["浏览器端<br/>Canvas 雷达可视化"]
@@ -147,18 +149,18 @@ graph LR
 
 ## 网页雷达可视化 + 手动遥控
 
-ESP32 内置 Web 服务器，连接其 Wi-Fi (`APF-NVC`) 后浏览器访问 `http://192.168.1.1`:
+ESP32 内置 Web 服务器，连接其 Wi-Fi (`TARS`) 后浏览器访问 `http://192.168.10.1`:
 
 **雷达显示**:
 - Canvas 极坐标渲染 — 零外部依赖
 - 同心圆距离网格 (1m~6m, 危险区/安全区分色)
 - 散点着色: 红色 (危险区), 绿色 (安全/感知区), 黄色 (噪声区)
 - 实时温度显示 (绿 <30°, 黄 30-50°, 红 >50°) + 统计
-- 蓝色方向线 = 自动模式 (APF), 红色 = 手动摇杆
+- 蓝色方向线 = 自动模式 (APF+VFH), 红色 = 手动摇杆
 
-**手动遥控**: 顶部状态栏点击「自动」按钮切换手动模式，在雷达图上拖拽即可控制小车方向 (8Hz, 5% 死区)。松开后车停止，按钮切回自动模式恢复 APF 导航。移动端已禁用触摸手势 (touch-action:none)，切 tab 时自动停车。
+**手动遥控**: 顶部状态栏点击「自动」按钮切换手动模式，在雷达图上拖拽即可控制小车方向 (8Hz, 5% 死区)。松开后车停止，按钮切回自动模式恢复 APF+VFH 导航。移动端已禁用触摸手势 (touch-action:none)，切 tab 时自动停车。
 
-网页通过 WebSocket (`ws://192.168.1.1:80/ws`) 接收 JSON 数据流并上行遥控指令。
+网页通过 WebSocket (`ws://192.168.10.1:80/ws`) 接收 JSON 数据流并上行遥控指令。
 
 ## WebSocket 数据格式
 
@@ -181,7 +183,7 @@ JSON 帧结构 (ESP32 端 snprintf 手写, ~1.9KB):
 - `ts`: esp_timer_get_time() 微秒时间戳
 - `temp`: 温度值 (°C)，无数据时为 `null`
 - `mode`: `"auto"` 或 `"manual"`，反映当前驾驶模式
-- `cart`: APF 输出 (自动) 或摇杆指令 (手动) 的笛卡尔合力 `{dx, dy}`
+- `cart`: APF+VFH 合力输出 (自动) 或摇杆指令 (手动) 的笛卡尔力 `{dx, dy}`
 - `vectors`: 77 个极坐标点 `{a: angle_deg, d: distance_mm}` (72 LiDAR + 5 Flame)
 
 ### 上行指令 (浏览器 → ESP32)
@@ -245,13 +247,14 @@ pio run -t upload -t uploadfs -t monitor
 
 ## 关键设计决策
 
-- **双频率解耦**: APF 势场解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ 可调, 默认 50ms, 见 `MOTOR_EMA_TAU_MS`) 消除帧间抖动
+- **APF + VFH 双层导航**: APF 斥力处理近距避障 (连续幂律, 无跳变); VFH 360° 全向直方图扫描选择最优通行方向, 引力方向由 VFH 动态决定 (不再固定前向)
+- **VFH 角度 EMA 平滑**: α=0.8, 约 2 帧 (500ms) 收敛, 环绕安全处理 0°/360° 边界, 消除通道选择跳变
+- **VFH 通道评分**: `score = width + GOAL_BIAS × width × cos(center)`, 宽度相近时偏好正前方, 360° 全向无锥区限制
+- **双频率解耦**: APF+VFH 解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 (τ 可调, 默认 50ms, 见 `MOTOR_EMA_TAU_MS`) 消除帧间抖动
 - **无锁同步**: FreeRTOS 事件组 + 队列完成所有任务间通信, 无共享内存竞争
-- **极坐标统一**: LiDAR 72 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, APF 算法输入为 77 维齐次向量
+- **极坐标统一**: LiDAR 72 扇区 + 火焰 5 虚拟点均以 `(angle_deg, distance_mm)` 极坐标表示, 算法输入为 77 维齐次向量
 - **拆分斥力剖面**: x 分量使用 1/r² 控制后退时机, y 分量使用 1/r 使转向力分布更均匀, 避免近距爆发
-- **间隙跟随**: 前方 120° 锥形内最开阔方向施加补充引力 (APF_OPEN_GAIN), 使小车沿走廊方向行进而非在两墙间折返
 - **日志无阻塞**: Web 任务仅等 BIT_LOG_Q_READY, 温度非阻塞取最新值, 确保雷达数据流不因低速传感器卡顿
 - **板载 Web 可视化**: Canvas 2D API 实现极坐标雷达图, 无任何 CDN 依赖, 13KB 文件通过 SPIFFS 部署在 ESP32 上
 - **Wi-Fi AP 模式**: 开放热点, 无需外部路由器, 任何设备连接后即可打开网页查看雷达
-
-- **手动遥控模式**: 通过 BIT_MANUAL_MODE 事件位协调 apf_task 暂停 / ws_handler 接管 q_cart 控制权，前端 Canvas 摇杆实时直控
+- **手动遥控模式**: 通过 BIT_MANUAL_MODE 事件位协调 apf_task 暂停 / ws_handler 接管 q_cart 控制权, 前端 Canvas 摇杆实时直控

@@ -6,6 +6,6 @@
 #include "apf_common.h"
 
 /**
- * @brief APF 避障任务入口
+ * @brief APF 避障任务入口 (FreeRTOS task)
  */
 void apf_task(void *pvParameters);

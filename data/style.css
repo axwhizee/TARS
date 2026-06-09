@@ -25,7 +25,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none;user-select:none;-
 .c-danger{background:#ff4444}
 .c-safe{background:#44ff44}
 .c-total{background:#55bbff}
-.mode-btn{padding:4px 14px;border:1px solid rgba(0,180,255,.4);border-radius:6px;background:rgba(0,140,255,.10);color:#55bbff;font-size:13px;font-family:monospace;cursor:pointer;transition:all .25s;flex-shrink:0;white-space:nowrap}
+.mode-btn{position:absolute;bottom:90px;right:16px;padding:4px 14px;border:1px solid rgba(0,180,255,.4);border-radius:6px;background:rgba(0,140,255,.10);color:#55bbff;font-size:13px;font-family:monospace;cursor:pointer;transition:all .25s;white-space:nowrap;z-index:1}
 .mode-btn:hover{border-color:rgba(0,180,255,.7);color:#88ccff}
 .mode-btn.manual{border-color:rgba(255,68,68,.4);background:rgba(255,50,0,.10);color:#ff6644}
 .mode-btn.manual:hover{border-color:rgba(255,68,68,.7);color:#ff8855}

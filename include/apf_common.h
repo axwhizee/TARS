@@ -14,7 +14,8 @@
 
 // WiFi 与全局配置
 
-#define WIFI_SSID           "APF-NVC"   // 未加密的开发 AP
+#define WIFI_SSID           "TARS"   // 未加密的开发 AP
+#define WEB_ADDR            "192.168.10.1"
 #define WEBSOCKET_PORT      80      // HTTP 协议的默认端口
 // 传感器同步频率，直接决定温度/火焰传感器采样频率，间接影响APF法处理频率，取决于雷达频率（2~8Hz）
 #define SENSOR_FREQ         4
@@ -116,17 +117,27 @@ DS18B20_PIN         9   // TEMP-DQ
 #define DS18B20_RES_BITS    10  // 10-bit 精度 (0.25°C, 188ms 转换), 支持 4Hz
 
 // APF 人工势场法参数，距离单位统一为 mm
+// 引力方向由 VFH 算法动态选择, 幅值随通道宽度缩放
 
 #define Q_POLAR_DEPTH   (LIDAR_SECTORS + FLAME_SENSOR_COUNT)    // 传感器数据统一队列
-#define APF_SAFE_RANGE      4000.0f     // 安全感知范围，超出视为噪声。由于实际雷达数据偏小，应小于6000
-#define APF_DANGER_RANGE    800.0f      // 危险区阈值
-#define APF_PERCEPTION_MIN  100.0f      // 最小感知（死区）距离（避免自身/地面对 1/r² 的无穷大）
-#define APF_ATTRACT_GAIN    4000.0f     // 引力增益 (K_att)，目前仅用于产生前向行进引力，影响小车的速度
-// #define APF_REPULSE_GAIN    APF_ATTRACT_GAIN * APF_DANGER_RANGE / 14  // 斥力增益 (K_rep)
-#define APF_REPULSE_GAIN    40.0f       // 斥力增益 (K_rep)，较高则曲线更加极端，近距离更敏感，远距离不敏感
-#define APF_DANGER_RE_WT    1.2f        // 危险区斥力权重倍率
-#define APF_SAFE_RE_WT      0.8f        // 感知区斥力权重倍率
-#define APF_OPEN_GAIN       (APF_ATTRACT_GAIN * 0.3f)  // 开阔方向引力 (补充前向力)
+#define APF_RANGE_MAX   4000.0f     // 最大感知范围，超出视为噪声
+#define APF_RANGE_REP   800.0f      // 斥力归一化锚点 (r = r_ref 时力 = K)
+#define APF_RANGE_MIN   100.0f      // 死区距离 (避免 1/0 发散)
+#define APF_GAIN_REP_X  80.0f       // 斥力 X 增益
+#define APF_GAIN_REP_Y  100.0f      // 斥力 Y 增益 (r = r_ref 处的转向分量)
+#define APF_REP_NX      1.6f        // X 衰减指数 (1/r^n, 越大近距离制动越猛)
+#define APF_REP_NY      1.0f        // Y 衰减指数 (1/r^n, 越小远距离转向越灵敏)
+#define APF_ATT_BASE    200.0f      // VFH 引力基础增益 (× 通道宽度缩放)
+
+// VFH (Vector Field Histogram) 参数
+
+#define VFH_BINS            LIDAR_SECTORS               // 72 bins, 5°/bin
+#define VFH_THRESH_MM       1200.0f                     // 障碍判定阈值 (<此值视为不可通行)
+#define VFH_MIN_WIDTH       4                           // 最小有效通道宽度 (4 bins ≈ 20°)
+#define VFH_SMOOTH_W        1.5f                        // 直方图平滑权重 (3点加权移动平均)
+#define VFH_IS_FREE_TH      0.25f                       // 平滑直方图低于此值视为可通行
+#define VFH_GOAL_BIAS       0.15f                       // 正前方偏好 (0=无偏好, 1=强偏好)
+#define VFH_EMA_ALPHA       0.8f                        // 角度 EMA 平滑 (0=纯惯性, 1=无平滑)
 
 // 电机驱动配置
 
@@ -141,9 +152,9 @@ DS18B20_PIN         9   // TEMP-DQ
 // α = 1 - exp(-dt/τ),  dt = 1000/MOTOR_FREQ_HZ,  τ = MOTOR_EMA_TAU_MS
 // α 越大响应越快 (τ 越小时 α 越接近 1)
 #define MOTOR_EMA_ALPHA     (1.0f - expf(-(float)(1000 / MOTOR_FREQ_HZ) / MOTOR_EMA_TAU_MS))
-#define MOTOR_MAX_MM        APF_SAFE_RANGE      // 输出幅值上限，用于向量归一化，影响平均速度
+#define MOTOR_MAX_MM        APF_RANGE_MAX       // 输出幅值上限，用于向量归一化，影响平均速度
 #define MOTOR_TIMEOUT_MS    1000    // 指令超时阈值，超时停车
 #define MOTOR_DEADZONE_MM   80.0f   // 笛卡控制尔死区
-#define MOTOR_TURN_RATIO    0.25f   // 差速控制中角分量的基础灵敏度系数
-#define MOTOR_TURN_GAIN_MI  0.5f    // 差速控制中角分量的动态灵敏度下限
-#define MOTOR_TURN_GAIN_MX  2.0f - MOTOR_TURN_GAIN_MI   // 差速控制中角分量的动态灵敏度上限
+#define MOTOR_TURN_RATIO    0.20f   // 差速控制中角分量的基础灵敏度系数
+#define MOTOR_TURN_GAIN_MI  0.20f   // 差速控制中角分量的动态灵敏度下限
+#define MOTOR_TURN_GAIN_MX  2.40f - MOTOR_TURN_GAIN_MI  // 差速控制中角分量的动态灵敏度上限
