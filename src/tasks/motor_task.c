@@ -58,6 +58,7 @@ static inline void ema_update(const vector_cart_t *cmd, motor_ema_t *ema) {
 static inline void diff_control(float x, float y) {
     float dx_u = x / MOTOR_MAX_MM;          // 归一化到 [-1, 1]
     float dy_u = y / MOTOR_MAX_MM;
+    // float angle = atan2f(dy_u, dx_u) / DEG_2_RAD;   // 获得角度
 
     // |dy| 越大, 前进分量衰减越多
     float scale = 1.0f - fabsf(dy_u) * MOTOR_DX_COUPLING;
@@ -66,8 +67,23 @@ static inline void diff_control(float x, float y) {
     float propulsion = dx_u * scale;        // 动力: 被 dy 抑制的前进量
     float steering   = dy_u * MOTOR_STEER_GAIN; // 转向: 直接反映 dy
 
-    float left  = propulsion + steering;
-    float right = propulsion - steering;
+    // 小车后退时减速
+    if (propulsion < MOTOR_DEAD_ZONE) {
+        propulsion *= MOTOR_REV_GAIN;
+        // steering *= MOTOR_REV_GAIN;
+    }
+
+    float left  = propulsion - steering;
+    float right = propulsion + steering;
+    // 当发生自旋时，削弱旋转速度
+    if (left * right < 0) {
+        left *= MOTOR_SPIN_GAIN;
+        right *= MOTOR_SPIN_GAIN;
+    }
+    // 差速控制路的陷阱在于，当进行差速计算时，小车 x 分量小于 y 分量时开始原地旋转
+    // 当 x 值受到削弱，会导致进入旋转状态的阈值提升，同时旋转速度也会增强
+    // 为了避免旋转过快，此时应当对 y 分量进行抑制，但是也需要考虑死区问题
+    // 小车的速度应当正比于：控制频率（低频时应当减速以精细控制）、EMA收敛速度（收敛慢则应减速）
 
     // 比例限幅 (保持左右转向比)
     float m = fmaxf(fabsf(left), fabsf(right));

@@ -53,7 +53,8 @@ static const vector_polar_t *lidar_process(
             continue;
         }
 
-        sectors[s].angle = (float)(base + end) / 2.0f;
+        // 添加雷达角度偏移值
+        sectors[s].angle = (float)(base + end) / 2.0f + LIDAR_SHIFT_DEG;
         sum += LIDAR_MIN_WEIGHT * d_min;    // 最小值加权, 增强近距敏感性
         sectors[s].distance = sum / (LIDAR_MIN_WEIGHT + valid_pts);
     }

@@ -107,6 +107,7 @@ DS18B20_PIN         9   // TEMP-DQ
 #define LD14P_UART_BAUD     115200  // 波特率
 #define LD14P_POINTS_FRAME  12      // 每个雷达数据帧包含的点数量
 #define LD14P_POINTS_ALL    360     // 雷达完整一周的点云数量
+#define LIDAR_SHIFT_DEG     -5.0f   // 雷达测量值偏移，叠加后得到实际值
 #define LIDAR_SECTORS       72      // 降采样后的点数，请确保该值是360的因数
 #define LIDAR_MIN_WEIGHT    2 - 1   // 区间最小值权重，在降采样时对区间最小值会加权
 
@@ -123,23 +124,23 @@ DS18B20_PIN         9   // TEMP-DQ
 
 #define Q_POLAR_DEPTH   (LIDAR_SECTORS + FLAME_SENSOR_COUNT)    // 传感器数据统一队列
 #define APF_RANGE_MAX   4000.0f     // 最大感知范围，超出视为噪声
-#define APF_RANGE_REP   800.0f      // 斥力归一化锚点 (r = r_ref 时力 = K)
+#define APF_RANGE_REP   400.0f      // 斥力归一化锚点 (r = r_ref 时力 = K)
 #define APF_RANGE_MIN   100.0f      // 死区距离 (避免 1/0 发散)
-#define APF_GAIN_REP_X  200.0f      // 斥力 X 增益
+#define APF_GAIN_REP_X  160.0f      // 斥力 X 增益
 #define APF_GAIN_REP_Y  100.0f      // 斥力 Y 增益 (r = r_ref 处的转向分量)
-#define APF_REP_NX      0.4f        // X 衰减指数 (1/r^n, 越大近距离制动越猛)
-#define APF_REP_NY      1.6f        // Y 衰减指数 (1/r^n, 越小远距离 转向越灵敏)
-#define APF_ATT_BASE    2000.0f     // VFH 引力基础增益 (× 通道宽度缩放)
+#define APF_REP_NX      0.6f        // X 衰减指数 (1/r^n, 越大近距离制动越猛)
+#define APF_REP_NY      0.8f        // Y 衰减指数 (1/r^n, 越小远距离 转向越灵敏)
+#define APF_ATT_BASE    1200.0f     // VFH 引力基础增益 (× 通道宽度缩放)
 
 // VFH (Vector Field Histogram) 参数
 
 #define VFH_BINS    LIDAR_SECTORS   // 72 bins, 5°/bin
-#define VFH_THRESH_MM   1200.0f     // 障碍判定阈值 (<此值视为不可通行)
-#define VFH_MIN_WIDTH   4           // 最小有效通道宽度 (4 bins ≈ 20°)
-#define VFH_SMOOTH_W    1.5f        // 直方图平滑权重 (3点加权移动平均)
-#define VFH_IS_FREE_TH  0.25f       // 平滑直方图低于此值视为可通行
-#define VFH_GOAL_BIAS   0.20f       // 正前方偏好 (0=无偏好, 1=强偏好)
-#define VFH_EMA_ALPHA   0.6f        // 角度 EMA 平滑 (0=纯惯性, 1=无平滑)
+#define VFH_THRESH_MM   1600.0f      // 障碍判定阈值 (<此值视为不可通行)
+#define VFH_MIN_WIDTH   3           // 最小有效通道宽度 (4 bins ≈ 20°)
+#define VFH_SMOOTH_W    1.50f       // 直方图平滑权重 (3点加权移动平均)
+#define VFH_IS_FREE_TH  0.40f       // 平滑直方图低于此值视为可通行
+#define VFH_GOAL_BIAS   0.60f       // 正前方偏好 (0=无偏好, 1=强偏好)
+#define VFH_EMA_ALPHA   0.80f       // 角度 EMA 平滑 (0=纯惯性, 1=无平滑)
 
 // APF+VFH 可调参数结构体 (运行时由 ws_handler 修改, NVS 持久化)
 // APF_RANGE_MAX / APF_RANGE_MIN 为安全边界, 不参与热调
@@ -171,8 +172,10 @@ extern apf_params_t g_apf_params;
 
 #define MOTOR_FREQ_HZ       SENSOR_FREQ * 2     // 电机控制任务频率，为传感器工作频率的两倍
 #define MOTOR_MAX_MM        APF_RANGE_MAX   // 输出幅值上限，用于向量归一化，影响平均速度
-#define MOTOR_EMA_ALPHA     0.90f   // α 越大响应越快，取 1 时无平滑效果
-#define MOTOR_TIMEOUT_MS    1000    // 指令超时阈值，超时停车
-#define MOTOR_DX_COUPLING   0.80f   // dx-dy 耦合系数: |dy|越大前进分量越低
-#define MOTOR_STEER_GAIN    0.05f   // dy → 差速转向增益 (归一化后映射)
-#define MOTOR_DEAD_ZONE     0.03f   // 死区阈值 (归一化 [-1,1])
+#define MOTOR_EMA_ALPHA     0.90f   // 平滑滤波，α 越大响应越快，取 1 时无平滑效果
+#define MOTOR_TIMEOUT_MS    500     // 指令超时阈值（ms），超时停车
+#define MOTOR_DX_COUPLING   0.20f   // 转向减速系数，值越高小车转向时速度越慢
+#define MOTOR_STEER_GAIN    0.50f   // 差速转向增益
+#define MOTOR_SPIN_GAIN     0.10f   // 原地旋转系数
+#define MOTOR_REV_GAIN      0.40f   // 小车后退时的系数修正
+#define MOTOR_DEAD_ZONE     0.01f   // 死区阈值 (归一化 [-1,1])
