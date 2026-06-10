@@ -2,16 +2,27 @@
  * @file web_task.c
  * @brief HTTP 静态文件服务 + WebSocket JSON 推送 + 手动遥控
  *
- * 三条数据路径:
+ * 数据路径:
  *   A) HTTP GET → 预加载的 PSRAM buffer (零 fopen 争用)
- *   B) WS 下行 → apf_task→q_log→主循环→snprintf JSON→ws_send_all 广播
- *   C) WS 上行 → 事件驱动 ws_handler (单帧即返)→cJSON 解析→q_cart/g_cart_cmd
+ *   B) WS 下行周期 → apf_task→q_log→主循环→snprintf JSON→ws_send_all 广播
+ *   C) WS 下行事件 → ws_handler 内 snprintf 响应帧, 直接发送给请求者
+ *   D) WS 上行 → 事件驱动 ws_handler (单帧即返)→cJSON 解析→统一 action 分发
  *
- * ws_handler 采用 IDF 官方回调模式 (无 while(1)), 配合 cfg.close_fn 清理.
- * 主循环 JSON 手写 snprintf 避免堆碎片, 上行小消息用 cJSON 临时解析.
+ * 上行协议: 所有消息统一使用 "action" 字段分发
+ *   {"action":"set_mode",     "mode":"manual"|"auto"}
+ *   {"action":"cmd",          "dx":N, "dy":N}
+ *   {"action":"get_params"}
+ *   {"action":"update_params","params":{...12 fields...}}
+ *   {"action":"reset_params"}
+ *
+ * 下行协议: 两种类型, 不混合
+ *   周期帧 (4Hz): {"ts":N, "temp":F|null, "cart":{dx,dy}, "vectors":[...]}
+ *   事件帧:       {"action":"mode_changed","mode":"manual"|"auto"}
+ *                 {"action":"params","params":{...12 fields...}}
  */
 
 #include "tasks/web_task.h"
+#include "tasks/apf_task.h"
 #include "apf_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -48,7 +59,7 @@ typedef struct {
 
 static static_file_t s_files[3];
 
-// SPIFFS 不支持并发读, 启动时一次性预加载到 PSRAM, 后续 HTTP GET 零 fopen
+// 启动时一次性将 SPIFFS 文件预加载到 PSRAM, 后续 HTTP GET 零 fopen
 static void preload_static_files(void) {
     const char *paths[] = {"/index.html", "/style.css", "/script.js"};
     const char *mimes[] = {"text/html", "text/css", "application/javascript"};
@@ -69,14 +80,14 @@ static void preload_static_files(void) {
     }
 }
 
-// WS 客户端管理
+// 注册新 WS 客户端 fd, 超过 WS_MAX_CLIENTS 则静默丢弃
 static void ws_add_client(int fd) {
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
     if (ws_count < WS_MAX_CLIENTS) ws_fds[ws_count++] = fd;
     xSemaphoreGive(ws_mutex);
 }
 
-// 交换式删除 (swap-with-last), O(1)
+// O(1) 交换式 WS 删除: 用最后一个元素覆盖被删位置
 static void ws_remove_client(int fd) {
     xSemaphoreTake(ws_mutex, portMAX_DELAY);
     for (int i = 0; i < ws_count; i++) {
@@ -85,9 +96,8 @@ static void ws_remove_client(int fd) {
     xSemaphoreGive(ws_mutex);
 }
 
-// WS 下行广播快照：异步发送 → 失败 fd 懒清理 (不持锁发送, 避免阻塞 ws_handler)
+// WS 下行: 广播给所有已连接客户端, 失败的 fd 在更新列表时懒清理
 static void ws_send_all(const char *data, size_t len) {
-    // 构造 WebSocket 文本帧
     httpd_ws_frame_t pkt = {
         .type    = HTTPD_WS_TYPE_TEXT,
         .payload = (uint8_t *)data,
@@ -119,9 +129,81 @@ static void ws_send_all(const char *data, size_t len) {
     xSemaphoreGive(ws_mutex);
 }
 
-// 
+// 单播: 向发起请求的客户端发送一帧事件响应
+static void ws_send_to(httpd_req_t *req, const char *data, size_t len) {
+    httpd_ws_frame_t rp = {
+        .type    = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)data,
+        .len     = len,
+    };
+    httpd_ws_send_frame(req, &rp);
+}
 
-// HTTP 静态文件处理
+/**
+ * @brief APF 参数 JSON 构建 (复用于 get_params / reset_params)
+ * 将 g_apf_params 序列化为 {"action":"params","params":{...}} 格式
+ */
+static int build_apf_params_json(char *buf, size_t bufsz) {
+    return snprintf(buf, bufsz,
+        "{\"action\":\"params\",\"params\":{"
+        "\"range_rep\":%.2f,"
+        "\"gain_rep_x\":%.2f,\"gain_rep_y\":%.2f,"
+        "\"rep_nx\":%.2f,\"rep_ny\":%.2f,\"att_base\":%.2f,"
+        "\"vfh_thresh\":%.2f,\"vfh_min_w\":%d,"
+        "\"vfh_smooth_w\":%.2f,\"vfh_free_th\":%.2f,"
+        "\"vfh_goal_bias\":%.2f,\"vfh_ema_alpha\":%.2f}}",
+        g_apf_params.range_rep,
+        g_apf_params.gain_rep_x, g_apf_params.gain_rep_y,
+        g_apf_params.rep_nx, g_apf_params.rep_ny, g_apf_params.att_base,
+        g_apf_params.vfh_thresh, g_apf_params.vfh_min_w,
+        g_apf_params.vfh_smooth_w, g_apf_params.vfh_free_th,
+        g_apf_params.vfh_goal_bias, g_apf_params.vfh_ema_alpha);
+}
+
+// APF 参数数据驱动校验表
+typedef struct {
+    const char *key;
+    float *field_f;     // float 字段指针 (int 字段为 NULL)
+    int   *field_i;     // int 字段指针 (float 字段为 NULL)
+    float  min_val;
+    float  max_val;
+} param_field_t;
+
+// clang-format off
+static const param_field_t PARAM_FIELDS[] = {
+    {"range_rep",     &g_apf_params.range_rep,     NULL, APF_RANGE_MIN,    APF_RANGE_MAX},
+    {"gain_rep_x",    &g_apf_params.gain_rep_x,    NULL, 0.0f,             500.0f},
+    {"gain_rep_y",    &g_apf_params.gain_rep_y,    NULL, 0.0f,             500.0f},
+    {"rep_nx",        &g_apf_params.rep_nx,        NULL, 0.1f,             5.0f},
+    {"rep_ny",        &g_apf_params.rep_ny,        NULL, 0.1f,             5.0f},
+    {"att_base",      &g_apf_params.att_base,      NULL, 0.0f,             2000.0f},
+    {"vfh_thresh",    &g_apf_params.vfh_thresh,    NULL, 200.0f,           5000.0f},
+    {"vfh_min_w",     NULL, &g_apf_params.vfh_min_w,     1.0f,            20.0f},
+    {"vfh_smooth_w",  &g_apf_params.vfh_smooth_w,  NULL, 0.1f,            10.0f},
+    {"vfh_free_th",   &g_apf_params.vfh_free_th,   NULL, 0.01f,           1.0f},
+    {"vfh_goal_bias", &g_apf_params.vfh_goal_bias, NULL, 0.0f,            1.0f},
+    {"vfh_ema_alpha", &g_apf_params.vfh_ema_alpha, NULL, 0.0f,            1.0f},
+};
+// clang-format on
+
+#define PARAM_FIELD_COUNT (sizeof(PARAM_FIELDS) / sizeof(PARAM_FIELDS[0]))
+
+// 遍历校验表, 逐字段从 JSON 解析并写入 g_apf_params
+static void apply_params_from_json(cJSON *params) {
+    for (int i = 0; i < (int)PARAM_FIELD_COUNT; i++) {
+        const param_field_t *f = &PARAM_FIELDS[i];
+        cJSON *item = cJSON_GetObjectItem(params, f->key);
+        if (!item || !cJSON_IsNumber(item)) continue;
+        float v = (float)item->valuedouble;
+        if (v < f->min_val || v > f->max_val) continue;
+        if (f->field_i)
+            *f->field_i = (int)v;
+        else
+            *f->field_f = v;
+    }
+}
+
+// HTTP 静态文件处理，从预加载的 PSRAM buffer 中匹配 URI 并返回, 404 则返回 FAIL
 static esp_err_t file_get_handler(httpd_req_t *req) {
     const char *uri = req->uri;
     if (strcmp(uri, "/") == 0) uri = "/index.html";
@@ -139,7 +221,7 @@ static esp_err_t file_get_handler(httpd_req_t *req) {
     return ESP_FAIL;
 }
 
-// httpd 框架在连接断开时自动调用 (CLOSE/RST/超时)
+// WS 断连回调，httpd 框架在连接断开时自动调用 (CLOSE/RST/超时)
 static void ws_close_cb(httpd_handle_t hd, int sockfd) {
     (void)hd;
     ws_remove_client(sockfd);
@@ -147,15 +229,10 @@ static void ws_close_cb(httpd_handle_t hd, int sockfd) {
 }
 
 /**
- * @brief WS handler — 事件驱动, 每次调用只处理一帧.
- *
- * 关键约束:
- *   1. 绝对不能有 while(1) — httpd 底层 select 多路复用, 循环阻塞会破坏调度
- *   2. 两步读取 (max_len=0 取帧头, max_len=pkt.len 取载荷) 确保缓冲区不残留
- *   3. cfg.close_fn 在连接断开时自动清理 ws_fds
+ * @brief WS 上行 handler: 统一 action 分发
+ * 事件驱动回调 (无 while(1)), 每次只处理一帧, 关键约束见文件头注释 
  */
 static esp_err_t ws_handler(httpd_req_t *req) {
-    // 握手: 注册客户端 (cfg.close_fn 负责清理)
     if (req->method == HTTP_GET) {
         int fd = httpd_req_to_sockfd(req);
         ws_add_client(fd);
@@ -163,7 +240,6 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         return ESP_OK;
     }
 
-    // 数据帧 — 两步法读取
     httpd_ws_frame_t pkt;
     memset(&pkt, 0, sizeof(pkt));
 
@@ -209,35 +285,69 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         if (ret == ESP_OK) {
             cJSON *root = cJSON_ParseWithLength((const char *)pkt.payload, pkt.len);
             if (root) {
-                cJSON *mode = cJSON_GetObjectItem(root, "mode");
-                if (mode && cJSON_IsString(mode)) {
-                    if (strcmp(mode->valuestring, "manual") == 0) {
-                        xEventGroupSetBits(eg_sync, BIT_MANUAL_MODE);
-                        vector_cart_t stop = { .dx = 0.0f, .dy = 0.0f };
-                        xQueueOverwrite(q_cart, &stop);
-                        g_cart_cmd = stop;
-                        ESP_LOGI(TAG, "=== Manual mode ON ===");
-                    } else if (strcmp(mode->valuestring, "auto") == 0) {
-                        xEventGroupClearBits(eg_sync, BIT_MANUAL_MODE);
-                        ESP_LOGI(TAG, "=== Auto mode restored ===");
-                    }
-                }
+                cJSON *action = cJSON_GetObjectItem(root, "action");
+                if (action && cJSON_IsString(action)) {
+                    const char *act = action->valuestring;
 
-                if (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) {
-                    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
-                    if (cmd) {
-                        cJSON *dx = cJSON_GetObjectItem(cmd, "dx");
-                        cJSON *dy = cJSON_GetObjectItem(cmd, "dy");
-                        if (cJSON_IsNumber(dx) && cJSON_IsNumber(dy)) {
-                            vector_cart_t c = {
-                                .dx = (float)dx->valuedouble,
-                                .dy = (float)dy->valuedouble,
-                            };
-                            xQueueOverwrite(q_cart, &c);
-                            g_cart_cmd = c;
+                    if (strcmp(act, "set_mode") == 0) {     // set_mode
+                        cJSON *mode = cJSON_GetObjectItem(root, "mode");
+                        if (mode && cJSON_IsString(mode)) {
+                            if (strcmp(mode->valuestring, "manual") == 0) {
+                                xEventGroupSetBits(eg_sync, BIT_MANUAL_MODE);
+                                vector_cart_t stop = { .dx = 0.0f, .dy = 0.0f };
+                                xQueueOverwrite(q_cart, &stop);
+                                ESP_LOGI(TAG, "=== Manual mode ON ===");
+                            } else if (strcmp(mode->valuestring, "auto") == 0) {
+                                xEventGroupClearBits(eg_sync, BIT_MANUAL_MODE);
+                                ESP_LOGI(TAG, "=== Auto mode restored ===");
+                            }
+                            // 回复 mode_changed 确认帧
+                            char resp[64];
+                            int n = snprintf(resp, sizeof(resp),
+                                "{\"action\":\"mode_changed\",\"mode\":\"%s\"}",
+                                (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE)
+                                    ? "manual" : "auto");
+                            ws_send_to(req, resp, n);
+                        }
+                    } else if (strcmp(act, "cmd") == 0) {   // cmd (摇杆控制)
+                        if (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) {
+                            cJSON *dx = cJSON_GetObjectItem(root, "dx");
+                            cJSON *dy = cJSON_GetObjectItem(root, "dy");
+                            if (cJSON_IsNumber(dx) && cJSON_IsNumber(dy)) {
+                                vector_cart_t c = {
+                                    .dx = (float)dx->valuedouble,
+                                    .dy = (float)dy->valuedouble,
+                                };
+                                xQueueOverwrite(q_cart, &c);
+                            }
+                        }
+                    } else if (strcmp(act, "get_params") == 0) {    // get_params
+                        char resp[512];
+                        int n = build_apf_params_json(resp, sizeof(resp));
+                        ws_send_to(req, resp, n);
+                    }
+                    else if (strcmp(act, "update_params") == 0) {   // update_params
+                        if (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) {
+                            cJSON *p = cJSON_GetObjectItem(root, "params");
+                            if (p) {
+                                apply_params_from_json(p);
+                                ESP_LOGI(TAG, "APF params updated via WS");
+                                // 回传最新参数值, 与 get_params 同格式
+                                char resp[512];
+                                int n = build_apf_params_json(resp, sizeof(resp));
+                                ws_send_to(req, resp, n);
+                            }
+                        }
+                    } else if (strcmp(act, "reset_params") == 0) {  // reset_params
+                        if (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) {
+                            params_init_defaults();
+                            char resp[512];
+                            int n = build_apf_params_json(resp, sizeof(resp));
+                            ws_send_to(req, resp, n);
                         }
                     }
                 }
+
                 cJSON_Delete(root);
             }
         }
@@ -247,12 +357,6 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-/**
- * 初始化: preload → httpd_start → 注册 URI → 主循环
- * JSON 格式: {"ts","temp","mode":"auto"|"manual","cart":{"dx","dy"},"vectors":[...]}
- *   下行 JSON 全部 snprintf 手写 (避免 77×cJSON malloc 导致堆碎片)
- *   g_cart_cmd 来源: 自动=apf_task, 手动=ws_handler
- */
 void web_task(void *pvParameters) {
     (void)pvParameters;
     ws_mutex = xSemaphoreCreateMutex();
@@ -263,8 +367,7 @@ void web_task(void *pvParameters) {
     cfg.server_port        = WEBSOCKET_PORT;
     cfg.max_open_sockets   = HTTPD_MAX_FDS;
     cfg.lru_purge_enable   = true;
-    // cfg.recv_wait_timeout  = 2;               // WS 长连接不设超时, 依赖 select 事件驱动
-    cfg.close_fn            = ws_close_cb;       // 连接断开时框架自动清理 ws_fds
+    cfg.close_fn            = ws_close_cb;
     cfg.send_wait_timeout   = 2;
 
     if (httpd_start(&ws_server, &cfg) != ESP_OK) {
@@ -307,7 +410,8 @@ void web_task(void *pvParameters) {
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++)
             xQueueReceive(q_log, &vectors[i], 0);
-        vector_cart_t cart = g_cart_cmd;
+        vector_cart_t rep = g_cart_rep;
+        vector_cart_t att = g_cart_att;
 
         float temp = NAN;
         xQueueReceive(q_temp, &temp, 0);
@@ -323,10 +427,10 @@ void web_task(void *pvParameters) {
             pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "%.2f", temp);
 
         pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
-            ",\"mode\":\"%s\"",
-            (xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE) ? "manual" : "auto");
-        pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
-            ",\"cart\":{\"dx\":%.2f,\"dy\":%.2f},\"vectors\":[", cart.dx, cart.dy);
+            ",\"v_apf\":{\"dx\":%.2f,\"dy\":%.2f}"
+            ",\"v_vfh\":{\"dx\":%.2f,\"dy\":%.2f}"
+            ",\"v_polars\":[",
+            rep.dx, rep.dy, att.dx, att.dy);
 
         for (int i = 0; i < Q_POLAR_DEPTH; i++) {
             if (pos >= (int)sizeof(json_buf) - 40) break;

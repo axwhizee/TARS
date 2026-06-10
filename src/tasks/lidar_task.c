@@ -16,7 +16,7 @@
 static const char *TAG = "LIDAR_TASK";
 
 /**
- * @brief LD14P_POINTS_PER_REV → LIDAR_SECTORS 扇区降采样, 最小值加权平均
+ * @brief LD14P_POINTS_ALL → LIDAR_SECTORS 扇区降采样, 最小值加权平均
  *
  * 加权公式: out = (Σ valid_points + LIDAR_MIN_WEIGHT × d_min) /
  *                 (valid_pts + LIDAR_MIN_WEIGHT)
@@ -28,9 +28,9 @@ static const char *TAG = "LIDAR_TASK";
  * @return 扇区数组指针 (静态 buffer, 下次调用覆盖)
  */
 static const vector_polar_t *lidar_process(
-    const vector_polar_t raw[LD14P_POINTS_PER_REV], uint16_t *valid_out) {
+    const vector_polar_t raw[LD14P_POINTS_ALL], uint16_t *valid_out) {
     static vector_polar_t sectors[LIDAR_SECTORS];
-    const int sector_width = LD14P_POINTS_PER_REV / LIDAR_SECTORS;
+    const int sector_width = LD14P_POINTS_ALL / LIDAR_SECTORS;
 
     for (int s = 0; s < LIDAR_SECTORS; s++) {
         int base = s * sector_width;
@@ -53,7 +53,8 @@ static const vector_polar_t *lidar_process(
             continue;
         }
 
-        sectors[s].angle = (float)(base + end) / 2.0f;
+        // 添加雷达角度偏移值
+        sectors[s].angle = (float)(base + end) / 2.0f + LIDAR_SHIFT_DEG;
         sum += LIDAR_MIN_WEIGHT * d_min;    // 最小值加权, 增强近距敏感性
         sectors[s].distance = sum / (LIDAR_MIN_WEIGHT + valid_pts);
     }
@@ -79,15 +80,15 @@ void ld14p_task(void *pvParameters) {
                 if (!cloud) continue;
 
                 // cloud_360 是驱动静态 buffer, 快照防御下一帧覆盖
-                vector_polar_t cloud_copy[LD14P_POINTS_PER_REV];
+                vector_polar_t cloud_copy[LD14P_POINTS_ALL];
                 memcpy(cloud_copy, cloud, sizeof(cloud_copy));
-                // ld14p_calibrate(cloud_copy, LD14P_POINTS_PER_REV, 5.9f, -18.975571f);
+                // ld14p_calibrate(cloud_copy, LD14P_POINTS_ALL, 5.9f, -18.975571f);
 
                 // 降采样 + 有效点统计
                 uint16_t valid = 0;
                 const vector_polar_t *sectors = lidar_process(cloud_copy, &valid);
-                ESP_LOGI(TAG, "REV: %lu / %d valid → %d sectors",
-                    valid, LD14P_POINTS_PER_REV, LIDAR_SECTORS);
+                ESP_LOGI(TAG, "REV: %lu / %d valid (%d s)",
+                    valid, LD14P_POINTS_ALL, LIDAR_SECTORS);
 
                 // q_polar 被占时跳过, 每 16 跳告警一次
                 if (!(xEventGroupGetBits(eg_sync) & BIT_LIDAR_Q_READY)) {

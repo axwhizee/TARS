@@ -1,15 +1,13 @@
 /**
  * @file motor_task.c
- * @brief 电机控制任务: EMA 平滑 → 分类 → PWM → 换向死区
+ * @brief 电机控制任务: EMA 平滑 → 直接 dx/dy 差速映射 → PWM 输出
  *
- * 架构: motor_classify() 分离判定, motor_apply() 独立计算 PWM.
+ * 架构: dx=前进分量, dy=转向分量, 直接映射到左右轮.
+ *   propulsion = dx × scale(|dy|)      // |dy| 越大前进越慢, 避免转向过快导致雷达畸变
+ *   steering   = dy × STEER_GAIN       // 转向差速与 dy 成正比
+ *   left/right = propulsion ± steering
  *
- * 判定优先级 (从上到下):
- *   1. M_DEAD   | |x|<DEADZONE 且 |y|<DEADZONE    | L=R=2
- *   2. M_SPIN_L | |y| > 2*|x| (垂向主导)         | ang × 0.5 纯旋转
- *   3. M_SPIN   | -MAX/2 < x < 0 (弱后退)        | ang × 1.0 纯旋转
- *   4. M_REV    | -MAX < x < -MAX/2 (强后退)     | 反向 ang + 速度减半
- *   5. M_FWD    | 其余                            | L=lin-ang, R=lin+ang
+ * 优势: 无角度分解的非线性跳跃, 转向比例始终可预测, 调参直观
  */
 #include "tasks/motor_task.h"
 #include "drivers/drv8833.h"
@@ -32,7 +30,7 @@ typedef struct {
  * @brief 标准一阶低通滤波 + 超时归零 + 幅值钳位
  * 公式: y[n] = α*x[n] + (1-alpha)*y[n-1]
  */
-static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) {
+static inline void ema_update(const vector_cart_t *cmd, motor_ema_t *ema) {
     const float alpha = MOTOR_EMA_ALPHA;
     const float alpha_inv = 1.0f - alpha;
     TickType_t now = xTaskGetTickCount();
@@ -54,62 +52,73 @@ static inline void motor_ema_update(const vector_cart_t *cmd, motor_ema_t *ema) 
     ema->dy = fmaxf(-MOTOR_MAX_MM, fminf(MOTOR_MAX_MM, alpha * ema->target_y + alpha_inv * ema->dy));
 }
 
-// 统一公式差速 (动态转向系数)
-static inline void motor_apply_simple(float x, float y) {
-    float lin = x / MOTOR_MAX_MM;
-    float ang = (y / MOTOR_MAX_MM) * MOTOR_TURN_RATIO;
+// 直接 dx/dy 差速映射
+// dx → 前进分量 (两侧同向), dy → 转向分量 (两侧反向)
+// dx-dy 耦合: |dy| 越大前进越低, 保证急转弯时降速
+static inline void diff_control(float x, float y) {
+    float dx_u = x / MOTOR_MAX_MM;          // 归一化到 [-1, 1]
+    float dy_u = y / MOTOR_MAX_MM;
+    // float angle = atan2f(dy_u, dx_u) / DEG_2_RAD;   // 获得角度
 
-    /**
-     * 动态转向增益：
-     * 与 lin 正相关，高速行进时转向更灵敏
-     * 与 ang 负相关，防止急转时转向过度
-     */
-    float gain = MOTOR_TURN_GAIN_MI +
-        MOTOR_TURN_GAIN_MX * fabsf(lin) * (1.0f - fabsf(ang));
-    ang *= gain;
-    if (lin < 0.0f) {
-        if (lin < -0.3f) {
-            ang += copysignf(0.1f, y);  // 对称破缺偏置
-        }
-        lin *= 0.4f;
+    // |dy| 越大, 前进分量衰减越多
+    float scale = 1.0f - fabsf(dy_u) * MOTOR_DX_COUPLING;
+    if (scale < 0.0f) scale = 0.0f;
+
+    float propulsion = dx_u * scale;        // 动力: 被 dy 抑制的前进量
+    float steering   = dy_u * MOTOR_STEER_GAIN; // 转向: 直接反映 dy
+
+    // 小车后退时减速
+    if (propulsion < MOTOR_DEAD_ZONE) {
+        propulsion *= MOTOR_REV_GAIN;
+        // steering *= MOTOR_REV_GAIN;
     }
 
-    float left  = lin - ang;
-    float right = lin + ang;
+    float left  = propulsion - steering;
+    float right = propulsion + steering;
+    // 当发生自旋时，削弱旋转速度
+    if (left * right < 0) {
+        left *= MOTOR_SPIN_GAIN;
+        right *= MOTOR_SPIN_GAIN;
+    }
+    // 差速控制路的陷阱在于，当进行差速计算时，小车 x 分量小于 y 分量时开始原地旋转
+    // 当 x 值受到削弱，会导致进入旋转状态的阈值提升，同时旋转速度也会增强
+    // 为了避免旋转过快，此时应当对 y 分量进行抑制，但是也需要考虑死区问题
+    // 小车的速度应当正比于：控制频率（低频时应当减速以精细控制）、EMA收敛速度（收敛慢则应减速）
 
-    // 比例限幅 (保持转向比)
+    // 比例限幅 (保持左右转向比)
     float m = fmaxf(fabsf(left), fabsf(right));
     if (m > 1.0f) { left /= m; right /= m; }
 
-    // 死区怠速
-    if (fabsf(left) * 100.0f < 3.0f && fabsf(right) * 100.0f < 3.0f) {
+    // 死区
+    if (fabsf(left) < MOTOR_DEAD_ZONE && fabsf(right) < MOTOR_DEAD_ZONE) {
         motor_set(0, 0);
         return;
     }
 
-    int8_t l = (int8_t)roundf(left  * 100.0f);
-    int8_t r = (int8_t)roundf(right * 100.0f);
-    motor_set(l, r);
+    motor_set((int8_t)roundf(left  * 100.0f),
+              (int8_t)roundf(right * 100.0f));
 }
 
-// 任务入口
 void motor_task(void *pvParameters) {
     (void)pvParameters;
     
     const TickType_t period = pdMS_TO_TICKS(1000 / MOTOR_FREQ_HZ);
     TickType_t last_wake = xTaskGetTickCount();
     motor_ema_t ema = {0};
-    ESP_LOGI(TAG, "Motor task started @ %dHz, alpha=%.2f (τ=%dms)",
-        MOTOR_FREQ_HZ, (float)MOTOR_EMA_ALPHA, MOTOR_EMA_TAU_MS);
+    ESP_LOGI(TAG, "Motor task started @ %dHz, alpha=%.2f coupling=%.2f steer_gain=%.2f",
+        MOTOR_FREQ_HZ, (float)MOTOR_EMA_ALPHA,
+        (float)MOTOR_DX_COUPLING, (float)MOTOR_STEER_GAIN);
     
     while (1) {
         vTaskDelayUntil(&last_wake, period);
 
         vector_cart_t cmd;
-        const vector_cart_t *pcmd = (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) ? &cmd : NULL;
-        motor_ema_update(pcmd, &ema);
+        if (xQueueReceive(q_cart, &cmd, 0) == pdTRUE) {
+            ema_update(&cmd, &ema);
+        } else {
+            ema_update(NULL, &ema);    // 队列空 → 保持当前目标, EMA 自然收敛
+        }
 
-        // --- 统一公式 (测试中) ---
-        motor_apply_simple(ema.dx, ema.dy);
+        diff_control(ema.dx, ema.dy);
     }
 }

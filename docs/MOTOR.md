@@ -210,28 +210,31 @@ dt = 1000/MOTOR_FREQ_HZ = 125ms (8Hz)
 | 150ms | 0.565 | 3~5 帧收敛，柔和过渡 |
 | 200ms | 0.465 | 5~7 帧收敛，大幅平滑 |
 
-τ 通过 `MOTOR_EMA_TAU_MS` 宏调节，用于抑制 APF 输出在靠近障碍物时的阶跃式跳变。
+### 6.2 幅值-角度分解差速 (diff_control)
 
-### 6.2 统一转向公式 (motor_apply_simple)
-
-当前启用的控制算法，将 `(dx, dy)` 直接转换为差速 PWM：
+当前启用的控制算法。将 `(dx, dy)` 力向量分解为 magnitude + angle, 独立映射速度与转向：
 
 ```
-lin = dx / MOTOR_MAX_MM
-ang = (dy / MOTOR_MAX_MM) * MOTOR_TURN_RATIO
+mag   = sqrt(dx² + dy²)
+angle = atan2(dy, dx)          // 0=正前方, +向右, rad
 
-// 动态转向: dx↓→转向↑, 走廊时 boost≈1.15
-ang *= 1.0 + (|ang| + 0.12) / (|lin| + 0.10)
-
-if (lin < 0):   // 后退态
-    ang += copysign(0.1, dy)  // 对称破缺偏置
-    lin *= 0.4                  // 后退减速
-
-left  = lin - ang
-right = lin + ang
-→ 比例归一化 → motor_set(left%, right%)
+if |angle| ≥ MOTOR_SPIN_THRESH_DEG (75°):
+    → 原地转向模式
+    spin = min(mag/MAX, 1) × MOTOR_SPIN_SPEED
+    left = -spin × sign(sin(angle))
+    right = +spin × sign(sin(angle))
+else:
+    → 前进/后退 + 转向模式
+    speed = cos(angle)          // 自然缩放: 0°→1, 90°→0, 180°→-1
+    turn  = sin(angle) × MOTOR_TURN_GAIN_BASE
+    left  = speed - turn
+    right = speed + turn
+    → 比例归一化(仅在超限时) → motor_set(left%, right%)
 ```
 
-### 6.3 状态机 (备用, 已注释)
+设计目标: 转向率与线速度解耦, 避免高速前进时比例限幅导致转向速度减半;
+原地转向转速由力幅值自然缩放 (近障碍物时力小→转速慢, 开阔空间力大→转速快)。
 
-`motor_classify()` 将合力向量分为 5 种模式 (M_DEAD/M_SPIN/M_SPIN_L/M_FWD/M_REV), 每个模式独立计算 PWM, FWD↔REV 切换触发换向制动。当前被 `motor_apply_simple` 替代, 代码保留供调参对比。
+### 6.3 旧算法 (已弃用, 代码已删除)
+
+原 `motor_classify()` 将合力向量分为 5 种模式 (M_DEAD/M_SPIN/M_SPIN_L/M_FWD/M_REV), 每个模式独立计算 PWM。已被 6.2 的幅值-角度分解替代。

@@ -4,7 +4,7 @@
  *
  *   1. NVS    — Wi-Fi 与 SPIFFS 需要 NVS 存储分区
  *   2. SPIFFS — 网页文件 (data/) 存于 SPIFFS 分区, 挂载到 /spiffs
- *   3. Wi-Fi  — AP 模式 (无加密), 静态 IP 192.168.1.1/24, 所有后续网络服务
+ *   3. Wi-Fi  — AP 模式 (无加密), 静态 IP WEB_ADDR/24, 所有后续网络服务
  *       (HTTP + WebSocket) 均基于此
  */
 #include "sys_init.h"
@@ -63,8 +63,8 @@ esp_err_t sys_wifi_init(void) {
 
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
     esp_netif_ip_info_t ip;
-    esp_netif_str_to_ip4("192.168.1.1", &ip.ip);
-    esp_netif_str_to_ip4("192.168.1.1", &ip.gw);
+    esp_netif_str_to_ip4(WEB_ADDR, &ip.ip);
+    esp_netif_str_to_ip4(WEB_ADDR, &ip.gw);
     esp_netif_str_to_ip4("255.255.255.0", &ip.netmask);
     esp_netif_dhcps_stop(ap_netif);
     esp_netif_set_ip_info(ap_netif, &ip);
@@ -74,7 +74,7 @@ esp_err_t sys_wifi_init(void) {
     esp_wifi_init(&cfg);
 
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                        wifi_event_handler, NULL, NULL);
+        wifi_event_handler, NULL, NULL);
     esp_wifi_set_mode(WIFI_MODE_AP);
     wifi_config_t wifi_cfg = {
         .ap = {
@@ -87,6 +87,6 @@ esp_err_t sys_wifi_init(void) {
     esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg);
     esp_err_t ret = esp_wifi_start();
 
-    ESP_LOGI(TAG, "AP ready: 192.168.1.1, ws://192.168.1.1:%d/ws", WEBSOCKET_PORT);
+    ESP_LOGI(TAG, "Wi-Fi AP ready");
     return ret;
 }

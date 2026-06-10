@@ -42,7 +42,7 @@ void temp_task(void *pvParameters) {
             continue;
         }
 
-        ESP_LOGI(TAG, "Temperature: %.2f°C", (double)temp);
+        ESP_LOGI(TAG, "Temp: %.2f°C", (double)temp);
 
         if (xEventGroupGetBits(eg_sync) & BIT_TEMP_Q_READY) {
             if ((skip_count++ & 0xF) == 0) {

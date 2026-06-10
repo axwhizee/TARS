@@ -21,7 +21,7 @@ typedef struct __attribute__((packed)) {
     uint8_t       ver_len;                           /* [1]  0x2C */
     uint16_t      speed;                             /* [2..3] 转速 (°/s) */
     uint16_t      start_angle;                       /* [4..5] 起始角度 (×0.01°) */
-    ld14p_point_t points[LD14P_POINTS_PER_PACK];     /* [6..41] 12 采样点 */
+    ld14p_point_t points[LD14P_POINTS_FRAME];     /* [6..41] 12 采样点 */
     uint16_t      end_angle;                         /* [42..43] 结束角度 */
     uint16_t      timestamp;                         /* [44..45] 时间戳 (ms) */
     uint8_t       crc8;                              /* [46] CRC8 */
