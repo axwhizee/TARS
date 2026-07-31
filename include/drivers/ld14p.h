@@ -50,7 +50,7 @@ const vector_polar_t *ld14p_collect(const ld14p_frame_t *frm);
 
 /**
  * @brief SlTransform 校准: 激光器相对旋转中心的几何偏移角度修正 (in-place)
- * @param points  点云数组, 修改 angle 字段
+ * @param points  点云数组, 修改 ang 字段
  * @param count   点数
  * @param offset_x  X 轴偏移 (mm), 官方默认 5.9
  * @param offset_y  Y 轴偏移 (mm), 官方默认 -18.976

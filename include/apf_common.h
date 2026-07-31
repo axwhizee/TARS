@@ -24,8 +24,8 @@
 
 // 极坐标向量（统一传感器数据）
 typedef struct {
-    float distance;     // 带显式角度的输出结构 (公用数据类型)
-    float angle;    // 传感器正前方为 0°, 顺时针递增 (LD14P 原生坐标系)
+    float dst;  // 带显式角度的输出结构 (公用数据类型)
+    float ang;  // 传感器正前方为 0°, 顺时针递增 (LD14P 原生坐标系)
 } vector_polar_t;
 
 // 笛卡尔坐标向量（APF计算结果，控制指令）
@@ -41,8 +41,8 @@ extern QueueHandle_t        q_cart;     // APF 计算结果队列，深度 1
 extern QueueHandle_t        q_temp;     // DS18B20 温度数据队列
 extern QueueHandle_t        q_log;      // 日志上传数据队列 (透传 vector_polar_t)
 extern EventGroupHandle_t   eg_sync;    // 传感器同步事件组
-extern vector_cart_t        g_cart_rep; // APF 斥力分量 (web 可视化)
-extern vector_cart_t        g_cart_att; // VFH 引力分量 (web 可视化)
+extern vector_cart_t        g_apf_rep;  // APF 斥力分量 (web 可视化)
+extern vector_cart_t        g_vfh_att;  // VFH 引力分量 (web 可视化)
 
 // 任务间同步事件组
 
@@ -68,28 +68,8 @@ extern vector_cart_t        g_cart_att; // VFH 引力分量 (web 可视化)
 // LD14P连线指南：1(Red)<->UTX, 2(Black)<->GND, 3(Yellow)<->URX, 4(Green)<->VCC
 
 /**
-临时方案：
-1. 电机：
-    * 4 -> 5
-    * 5 -> 6
-    * 6 -> 7
-    * 7 -> 15
-2. 雷达：
-    * 17 -> 由MCU|17飞线到PCB|03
-    * 18 -> 由MCU|18飞线到PCB|43
-3. 火焰：
-    * 11
-    * 12
-    * 13
-    * 14
-    * 16 -> PCB|16飞线到飞线到PCB|18，暂不执行
-4. 温度：
-    * 9
-MCU的3、46引脚已经被剪断，避免干扰电路
- */
-/**
-原始设置，因为PCB设计失误，暂放弃，修复方案：
-LED_PIN             48  // 开发板LED
+上述为临时设置，下面是正常设置（匹配最新PCB）
+WS2812_PIN          48  // 开发板WS2812灯珠数据引脚
 MOTOR_AIN1_PIN      11  // AIN1
 MOTOR_AIN2_PIN      12  // AIN2
 MOTOR_BIN1_PIN      13  // BIN1
@@ -114,7 +94,7 @@ DS18B20_PIN         9   // TEMP-DQ
 // 火焰传感器配置
 
 #define FLAME_SENSOR_COUNT  5       // 火焰传感器路数
-#define FLAME_DETECT_MM     500.0f  // 火焰信号转换的距离
+#define FLAME_DETECT_MM     400.0f  // 火焰信号转换的距离
 
 // DS18B20 温度传感器配置
 

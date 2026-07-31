@@ -65,7 +65,7 @@ nvs(16KB) → otadata(8KB) → phy_init(4KB) → factory(2MB) → ota_0(2MB) →
 | 2 | Flame GPIO 16 (center, angle 0°) is **not wired** | Pull-up keeps HIGH → always "no fire" |
 | 3 | `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n` | Task stacks stay in internal RAM (~4K words max safe) |
 | 4 | Motor min duty 75 (`MOTOR_MIN_DUTY`) | Overcomes static friction; duty→count linear map starts from `MOTOR_MIN_COUNT` |
-| 5 | Web task reads `g_cart_rep`/`g_cart_att` globals (not queue) | `apf_compute()` writes APF repulsion and VFH attraction separately to globals; web_task snapshots them for the WS `v_apf`/`v_vfh` fields. Combined cmd is computed client-side (`cmd = v_apf + v_vfh`). Motor control uses `q_cart` only |
+| 5 | Web task reads `g_apf_rep`/`g_cart_att` globals (not queue) | `apf_compute()` writes APF repulsion and VFH attraction separately to globals; web_task snapshots them for the WS `v_apf`/`v_vfh` fields. Combined cmd is computed client-side (`cmd = v_apf + v_vfh`). Motor control uses `q_cart` only |
 | 6 | `temp_task.c` uses **ESP32-S3 internal temperature sensor**, not DS18B20 | Old DS18B20 code preserved in `#if 0` block; driver at `src/drivers/ds18b20.c` is dead code |
 | 7 | Flame sensor init failure halts boot (`return` from `app_main`) | Logged as `ESP_LOGW` not `ESP_LOGE` — visually non-obvious but still fatal |
 | 8 | `ws_handler` is **callback-based, no while(1)** | httpd uses select multiplexing; blocking loops corrupt session state and cause `WS frame is not properly masked` errors |

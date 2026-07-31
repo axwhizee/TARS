@@ -21,7 +21,7 @@ static const char *TAG = "LIDAR_TASK";
  * 加权公式: out = (Σ valid_points + LIDAR_MIN_WEIGHT × d_min) /
  *                 (valid_pts + LIDAR_MIN_WEIGHT)
  *
- * distance ≤ 0 的点跳过; 有效点计入 *valid_out.
+ * dst ≤ 0 的点跳过; 有效点计入 *valid_out.
  *
  * @param raw       原始全周点云
  * @param valid_out [出参] 有效感知区点数
@@ -40,7 +40,7 @@ static const vector_polar_t *lidar_process(
         int valid_pts = 0;  // 区间内有效点
 
         for (int j = base; j < end; j++) {
-            float d = raw[j].distance;
+            float d = raw[j].dst;
             if (d <= 0.0f) continue;    // 无效点跳过
             if (d < 6000.0f) *valid_out += 1;   // 统计有效感知区点数
             sum += d;
@@ -49,14 +49,14 @@ static const vector_polar_t *lidar_process(
         }
 
         if (valid_pts == 0) {
-            sectors[s].distance = 0;     // 采样后无效点标记
+            sectors[s].dst = 0;     // 采样后无效点标记
             continue;
         }
 
         // 添加雷达角度偏移值
-        sectors[s].angle = (float)(base + end) / 2.0f + LIDAR_SHIFT_DEG;
+        sectors[s].ang = (float)(base + end) / 2.0f + LIDAR_SHIFT_DEG;
         sum += LIDAR_MIN_WEIGHT * d_min;    // 最小值加权, 增强近距敏感性
-        sectors[s].distance = sum / (LIDAR_MIN_WEIGHT + valid_pts);
+        sectors[s].dst = sum / (LIDAR_MIN_WEIGHT + valid_pts);
     }
 
     return sectors;

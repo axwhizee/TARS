@@ -410,8 +410,8 @@ void web_task(void *pvParameters) {
         vector_polar_t vectors[Q_POLAR_DEPTH];
         for (int i = 0; i < Q_POLAR_DEPTH; i++)
             xQueueReceive(q_log, &vectors[i], 0);
-        vector_cart_t rep = g_cart_rep;
-        vector_cart_t att = g_cart_att;
+        vector_cart_t rep = g_apf_rep;
+        vector_cart_t att = g_vfh_att;
 
         float temp = NAN;
         xQueueReceive(q_temp, &temp, 0);
@@ -436,7 +436,7 @@ void web_task(void *pvParameters) {
             if (pos >= (int)sizeof(json_buf) - 40) break;
             pos += snprintf(json_buf + pos, sizeof(json_buf) - pos,
                 "{\"a\":%.2f,\"d\":%.2f}%s",
-                vectors[i].angle, vectors[i].distance,
+                vectors[i].ang, vectors[i].dst,
                 (i < Q_POLAR_DEPTH - 1) ? "," : "");
         }
         pos += snprintf(json_buf + pos, sizeof(json_buf) - pos, "]}");

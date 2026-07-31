@@ -2,7 +2,7 @@
  * @file ld14p.c
  * @brief LD14P 激光雷达底层驱动
  *
- * cloud_360[LD14P_POINTS_ALL] 持久化, 每圈自然覆盖不主动清零, distance==0 标记无效点.
+ * cloud_360[LD14P_POINTS_ALL] 持久化, 每圈自然覆盖不主动清零, dst==0 标记无效点.
  * 圈检测用帧末点角度 (借鉴官方 SDK), 配合 150ms 防抖.
  */
 #include "drivers/ld14p.h"
@@ -112,8 +112,8 @@ const vector_polar_t *ld14p_collect(const ld14p_frame_t *frm) {
         int deg = (raw_angle / ANGLE_RES) % LD14P_POINTS_ALL;
         float angle_f = (float)raw_angle / ANGLE_RES;
 
-        cloud_360[deg].angle = angle_f;
-        cloud_360[deg].distance = (float)frm->points[i].distance;
+        cloud_360[deg].ang = angle_f;
+        cloud_360[deg].dst = (float)frm->points[i].distance;
         if (i == LD14P_POINTS_FRAME - 1) last_deg = angle_f;
     }
 
@@ -145,8 +145,8 @@ void ld14p_calibrate(vector_polar_t *points, float offset_x, float offset_y) {
     static float last_shift = 0.0f;
 
     for (uint16_t i = 0; i < LD14P_POINTS_ALL; i++) {
-        float dist = points[i].distance;
-        float angle = points[i].angle;
+        float dist = points[i].dst;
+        float angle = points[i].ang;
         float shift;
 
         if (dist > 0.0f) {
@@ -162,7 +162,7 @@ void ld14p_calibrate(vector_polar_t *points, float offset_x, float offset_y) {
         // 归一化到 [0, 360)
         if (angle > 360.0f) angle -= 360.0f;
         if (angle < 0.0f)   angle += 360.0f;
-        points[i].angle = angle;
+        points[i].ang = angle;
     }
 }
 

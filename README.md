@@ -116,7 +116,7 @@ graph TB
     FLAME -->|"q_polar (5点)"| APF
     TEMP -->|"q_temp (float)"| WS
     APF -->|"q_cart (cmd向量, 仅自动)"| EMA
-    APF -->|"g_cart_rep/g_cart_att (斥力+引力)"| WS
+    APF -->|"g_apf_rep/g_cart_att (斥力+引力)"| WS
     APF -->|"q_log (77点)"| WS
     SYNC -.-> APF
     EMA --> DIFF
@@ -315,7 +315,7 @@ pio run -t upload -t uploadfs -t monitor
 ## 关键设计决策
 
 - **APF + VFH 双层导航**: APF 斥力处理近距避障 (连续幂律, 无跳变); VFH 360° 全向直方图扫描选择最优通行方向, 引力方向由 VFH 动态决定 (不再固定前向)
-- **APF 斥力/引力分离输出**: `apf_compute()` 分别输出斥力 `g_cart_rep` 和引力 `g_cart_att` 两个全局变量, Web 可视化和电机指令解耦 — 前端客户端按 `cmd = v_apf + v_vfh` 合成合力
+- **APF 斥力/引力分离输出**: `apf_compute()` 分别输出斥力 `g_apf_rep` 和引力 `g_cart_att` 两个全局变量, Web 可视化和电机指令解耦 — 前端客户端按 `cmd = v_apf + v_vfh` 合成合力
 - **VFH 角度 EMA 平滑**: α=0.8, 约 2 帧 (500ms) 收敛, 环绕安全处理 0°/360° 边界, 消除通道选择跳变
 - **VFH 通道评分**: `score = width + GOAL_BIAS × width × cos(center)`, 宽度相近时偏好正前方, 360° 全向无锥区限制
 - **双频率解耦**: APF+VFH 解算 4Hz, 电机控制 8Hz, 通过 EMA 平滑 消除帧间抖动

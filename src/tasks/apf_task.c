@@ -21,8 +21,8 @@
 #include <math.h>
 
 static const char *TAG = "APF_TASK  ";
-vector_cart_t g_cart_rep;
-vector_cart_t g_cart_att;
+vector_cart_t g_apf_rep;
+vector_cart_t g_vfh_att;
 
 // 参数期默认值
 static const apf_params_t PARAMS_DEFAULT = {
@@ -67,8 +67,8 @@ static vector_cart_t apf_compute(const vector_polar_t *samples) {
 
     // 遍历 77 个采样点, 同时填充 APF 斥力和 VFH 直方图
     for (int i = 0; i < Q_POLAR_DEPTH; i++) {
-        float range = samples[i].distance;
-        float angle = samples[i].angle;
+        float range = samples[i].dst;
+        float angle = samples[i].ang;
 
         // 跳过无效点: 太近 (死区) 或太远 (噪声)
         if (range < APF_RANGE_MIN || range > APF_RANGE_MAX) continue;
@@ -151,8 +151,8 @@ static vector_cart_t apf_compute(const vector_polar_t *samples) {
     float att_x = att_gain * cosf(target_rad);
     float att_y = att_gain * sinf(target_rad);
 
-    g_cart_rep.dx = rep_x;  g_cart_rep.dy = rep_y;
-    g_cart_att.dx = att_x;  g_cart_att.dy = att_y;
+    g_apf_rep = (vector_cart_t){rep_x, rep_y};
+    g_vfh_att = (vector_cart_t){att_x, att_y};
 
     cmd.dx = rep_x + att_x;
     cmd.dy = rep_y + att_y;
@@ -168,8 +168,7 @@ void apf_task(void *pvParameters) {
     vector_cart_t  cmd;
 
     ESP_LOGI(TAG, "APF+VFH started: RepX=%.0f(nx=%.0f) RepY=%.0f(ny=%.0f) AttBase=%.0f GoalBias=%.2f EMA=%.2f",
-        g_apf_params.gain_rep_x, g_apf_params.rep_nx,
-        g_apf_params.gain_rep_y, g_apf_params.rep_ny,
+        g_apf_params.gain_rep_x, g_apf_params.rep_nx, g_apf_params.gain_rep_y, g_apf_params.rep_ny,
         g_apf_params.att_base, g_apf_params.vfh_goal_bias, g_apf_params.vfh_ema_alpha);
 
     while (1) {
@@ -178,18 +177,16 @@ void apf_task(void *pvParameters) {
             BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY, pdFALSE, pdTRUE, period);
 
         // 传感器超时
-        if ((bits & (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY))
-                != (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) {
+        if ((bits & (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) != (BIT_LIDAR_Q_READY | BIT_FLAME_Q_READY)) {
+            ESP_LOGW(TAG, "Sensor sync timeout");
             /* auto 模式下发送零向量停车, 防止残留旧指令导致失控.
              * manual 模式下不写 q_cart (web_task 已在控制). */
             // 超时给出刹车指令，手动模式除外
             if (!(xEventGroupGetBits(eg_sync) & BIT_MANUAL_MODE)) {
-                ESP_LOGW(TAG, "Sensor sync timeout");
-                cmd.dx = cmd.dy = 0.0f;
+                cmd = (vector_cart_t){0};   // C99 支持的写法，初始化结构体再赋值
                 xQueueOverwrite(q_cart, &cmd);
             }
-            g_cart_rep.dx = g_cart_rep.dy = 0.0f;
-            g_cart_att.dx = g_cart_att.dy = 0.0f;
+            g_apf_rep = g_vfh_att = (vector_cart_t){0};
             continue;   // 跳过本帧, 回到 Phase 1 重新等待
         }
 
