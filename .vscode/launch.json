@@ -1,0 +1,36 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "idf: OpenOCD + GDB (USB-JTAG)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/TARS.elf",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "idf: debug",
+            "MIMode": "gdb",
+            "miDebuggerPath": "C:/Users/Richa/.espressif/tools/xtensa-esp-elf-gdb/17.1_20260402/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb.exe",
+            "miDebuggerServerAddress": "localhost:3333",
+            "setupCommands": [
+                { "text": "target remote :3333", "ignoreFailures": true },
+                { "text": "set remote hardware-watchpoint-limit 2", "ignoreFailures": true },
+                { "text": "monitor reset halt", "ignoreFailures": true },
+                { "text": "flushregs", "ignoreFailures": true }
+            ],
+            "postRemoteConnectCommands": [
+                { "text": "target remote :3333" },
+                { "text": "monitor reset halt" },
+                { "text": "maintenance flush register-cache" }
+            ],
+            "externalConsole": false,
+            "internalConsoleOptions": "openOnSessionStart",
+            "logging": {
+                "moduleLoad": true,
+                "trace": true,
+                "engineLogging": false,
+                "programOutput": true,
+                "exceptions": true
+            }
+        }
+    ]
+}

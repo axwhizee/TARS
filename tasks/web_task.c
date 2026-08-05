@@ -32,7 +32,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
-#include "cJSON.h"
+#include "cJSON/cJSON.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>

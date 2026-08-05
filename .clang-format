@@ -1,0 +1,13 @@
+BasedOnStyle: LLVM
+
+IndentWidth: 2  # 2缩进
+UseTab:  Never  # 不使用Tab
+
+MaxEmptyLinesToKeep: 2  # 最大两个空行
+
+AllShortBlockOnASingleLine: Always  # 允许单行短代码块
+
+SpacesBeforeTrailingComments: 2   #  尾随注释最少2空格
+AlignTrailingComments: true   # 相邻行注释对齐
+
+ColumnLimit: 0  # 每行代码的长度限制，0表示不折行

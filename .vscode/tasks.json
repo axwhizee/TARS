@@ -1,0 +1,129 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "esp: build",
+            "type": "shell",
+            "command": ". 'C:/Users/Richa/.espressif/activate-idf.ps1'; idf.py build",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "group": "idf"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "icon": {   // 该字段需要安装`Tasks`扩展才生效
+                "id": "play",
+            },
+        },
+        {
+            "label": "esp: flash",
+            "type": "shell",
+            "command": ". 'C:/Users/Richa/.espressif/activate-idf.ps1'; idf.py flash",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "group": "idf"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "icon": {
+                "id": "symbol-event",
+            },
+        },
+        // {
+        //     "label": "esp: monitor",
+        //     "type": "shell",
+        //     "command": ". 'C:/Users/Richa/.espressif/activate-idf.ps1'; idf.py monitor",
+        //     "options": {
+        //         "cwd": "${workspaceFolder}"
+        //     },
+        //     "problemMatcher": [],
+        //     "icon": {
+        //         "id": "plug",
+        //     },
+        // },
+        // {
+        //     "label": "esp: build-flash-monitor",
+        //     "type": "shell",
+        //     "command": ". 'C:/Users/Richa/.espressif/activate-idf.ps1'; idf.py flash monitor",
+        //     "options": {
+        //         "cwd": "${workspaceFolder}"
+        //     },
+        //     "dependsOn": "idf: build",
+        //     "problemMatcher": [
+        //         "$gcc"
+        //     ],
+        //     "icon": {
+        //         "id": "run-all",
+        //     },
+        // },
+        {
+            "label": "esp: config",
+            "type": "shell",
+            "command": ". 'C:/Users/Richa/.espressif/activate-idf.ps1'; idf.py menuconfig",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "group": "idf"
+            },
+            "problemMatcher": [],
+            "icon": {
+                "id": "symbol-property",
+            },
+        },
+        {
+            "label": "esp: clean",
+            "type": "shell",
+            "command": ". 'C:/Users/Richa/.espressif/activate-idf.ps1'; idf.py fullclean",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "group": "idf"
+            },
+            "problemMatcher": [],
+            "icon": {
+                "id": "clear-all",
+            },
+        },
+        {
+            "label": "esp: debug",
+            "type": "shell",
+            "command": "'C:/Users/Richa/.espressif/tools/openocd-esp32/v0.12.0-esp32-20260424/openocd-esp32/bin/openocd.exe' -s 'C:/Users/Richa/.espressif/tools/openocd-esp32/v0.12.0-esp32-20260424/openocd-esp32/share/openocd/scripts' -f interface/esp_usb_jtag.cfg -f target/esp32s3.cfg",
+            "dependsOn": "idf: build",
+            "dependsOrder": "sequence",
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "openocd",
+                "pattern": {
+                    "regexp": ".",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "endLine": 2,
+                    "endColumn": 3,
+                    "message": 0
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Open On-Chip Debugger",
+                    "endsPattern": "Info : Listening on port 3333 for gdb connections"
+                }
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "hide": true,
+        }
+    ]
+}

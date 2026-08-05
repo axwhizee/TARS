@@ -31,3 +31,6 @@
     * 然后手动操控小车在不同的场景下，不断调整APF、VFH参数使其指向符合预期
     * 最后就可以放开让小车处于自动模式下运行了
     * 如果效果不符合预期，优先考虑降低小车速度（减少VFH基础值并随之调节APF斥力）
+11. ESPressif还提供MCP？
+12. [ESP32-S3：勘误表](https://docs.espressif.com/projects/esp-chip-errata/zh_CN/latest/esp32s3/02-errata-summary/index.html)
+13. 

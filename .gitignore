@@ -1,8 +1,18 @@
-.pio
-.vscode/.browse.c_cpp.db*
-.vscode/c_cpp_properties.json
-.vscode/launch.json
-.vscode/ipch
+# ESP-IDF build output
+build/
 
+# IDF Component Manager
+managed_components/
+
+# ESP-IDF generated
+sdkconfig
+sdkconfig.old
+dependencies.lock
+
+# VSCode
+# .vscode/launch.json
+# .vscode/ipch
+
+# Personal
 Paper/
-# AGENTS.md
+.opencode/

@@ -1,0 +1,12 @@
+{
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.formatting": "disabled",
+    "clangd.path": "C:/Users/Richa/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd.exe",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build",
+        "--query-driver=C:/Users/Richa/.espressif/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc*",
+        "--background-index",
+        "--header-insertion=never"
+    ],
+    "files.eol": "\n"
+}
