@@ -34,3 +34,10 @@
 11. ESPressif还提供MCP？
 12. [ESP32-S3：勘误表](https://docs.espressif.com/projects/esp-chip-errata/zh_CN/latest/esp32s3/02-errata-summary/index.html)
 13. 
+
+## 驱动库
+
+- drv8833
+    - 添加参数，控制是否考虑静摩擦克服动力
+    - 考虑添加指数系数控制：$y=x * (2^a-1)$，其中a能够控制x-y变化的曲线
+- ld14p

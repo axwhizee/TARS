@@ -36,7 +36,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". 'C:/Users/Richa/.e
 | `main/main.c` | Entrypoint — NVS/SPIFFS/Wi-Fi init, hardware drivers, 4 queues + 1 event group, 7 tasks |
 | `main/sys_init.c` | NVS flash → SPIFFS `/spiffs` → Wi-Fi AP (`TARS`, open, `192.168.10.1/24`, DHCP off) |
 | `main/apf_common.h` | Global types, RTOS handle `extern`s, event-group bits, GPIO pins, APF/motor/WiFi constants |
-| `drivers/` | `ld14p.c` (LiDAR UART), `drv8833.c` (DRV8833 PWM), `ds18b20.c` (**dead code**) — each `.c/.h` co-located |
+| `drivers/` | `ld14p/` subdriver (LD14P LiDAR, **adapt-drv v6.0 分层**: `ld14p.h/.c` 核心层 + `ld14p_config.h` + `ld14p_types.h` + `internal/` + `port/` + `README.md`); `drv8833/` subdriver (DRV8833 底盘驱动, 同分层, 含 `internal/` 底盘算法 + `port/` LEDC 移植层); `ds18b20.c` (**dead code**) — 独立 `.c/.h` 同目录 |
 | `tasks/` | 7 FreeRTOS tasks (prio 1–8, see main.c:93-99): `sysmon_task`(1), `web_task`(3, Core0), `apf_task`(4), `ld14p_task`(5), `temp_task`(6), `flame_task`(7), `motor_task`(8) |
 | `data/` | SPIFFS web UI — `index.html`, `script.js`, `style.css` (Canvas polar radar, WebSocket client). Built into `build/spiffs.bin` via `spiffs_create_partition_image` |
 | `libs/` | Vendored third-party libs — `cJSON/cJSON.c` (v1.7.19, used by web_task) + two unused zips |
@@ -58,8 +58,9 @@ nvs(16KB) → otadata(8KB) → phy_init(4KB) → factory(2MB) → ota_0(2MB) →
 
 ## Conventions
 
-- **All includes** use `""`. `main/CMakeLists.txt` sets `INCLUDE_DIRS` to `{main/, 项目根}` so `"apf_common.h"`, `"drivers/*.h"`, `"tasks/*.h"` all resolve. Headers live next to their `.c` (no `include/` mirror).
-- **Source discovery**: `main/CMakeLists.txt` does `FILE(GLOB_RECURSE ...)` over `main/` + `drivers/` + `libs/` — every `.c` auto-included.
+- **All includes** use `""`. `main/CMakeLists.txt` sets `INCLUDE_DIRS` to `{main/, tasks/, drivers/, drivers/ld14p/, drivers/drv8833/, libs/, 项目根}` so `"apf_common.h"`, `"drivers/ld14p/ld14p.h"`, `"drivers/drv8833/drv8833.h"`, `"drivers/*.h"`, `"tasks/*.h"` all resolve. Headers live next to their `.c` (no `include/` mirror).
+- **Source discovery**: `main/CMakeLists.txt` does `FILE(GLOB_RECURSE ...)` over `main/` + `drivers/` + `libs/` — every `.c` auto-included (含 `drivers/ld14p/`、`drivers/drv8833/` 子目录).
+- **Driver structure**: 外设驱动遵循 `adapt-drv` 分层模式 (见 `.opencode/skills/adapt-drv`) — 核心层 `xxx.h/.c`(无平台头) + `xxx_config.h` + `xxx_types.h` + `internal/`(核心内部) + `port/`(唯一平台 HAL, 含 `port_def.h` 硬件资源) + `README.md`。平台 HAL 头文件只允许出现在 `port/xxx_port.c`。
 - **Required IDF components**: `driver`, `esp_driver_gpio`, `esp_driver_ledc`, `esp_driver_rmt`, `esp_driver_tsens`, `esp_driver_uart`, `esp_event`, `esp_http_server`, `esp_netif`, `esp_timer`, `esp_wifi`, `nvs_flash`, `spiffs`. When adding a new peripheral, see the component table in "ESP-IDF v6.0 Key Changes".
 - **FreeRTOS**: `xTaskCreate` stack size in **words**. `q_cart` uses `xQueueOverwrite` → depth=1.
 - **Dual-core pinning**: Core 0 = WiFi + lwIP + `web_task` (network); Core 1 = all sensor/control tasks.
@@ -68,17 +69,17 @@ nvs(16KB) → otadata(8KB) → phy_init(4KB) → factory(2MB) → ota_0(2MB) →
 - **Static files preloaded** from SPIFFS to heap at startup (`preload_static_files()`), then served from RAM — no FILE\* contention at runtime.
 - **WS protocol**: All upstream messages use `action` field for unified dispatch. Periodic telemetry (4Hz) carries `v_apf` (APF repulsion), `v_vfh` (VFH attraction), and `v_polars` (77 sensor points) — combined cmd is computed client-side as `v_apf + v_vfh`. Event responses (`mode_changed`, `params`) are sent on-demand. Param validation uses a data-driven `PARAM_FIELDS[]` table.
 - **LIDAR_SECTORS = 72** — 360° → 72 sectors downsampling with min-weighted average. `Q_POLAR_DEPTH = LIDAR_SECTORS + FLAME_SENSOR_COUNT = 77`.
-- **EMA 平滑实际位置**: motor_task.c 对 dx/dy 一阶低通 (`MOTOR_EMA_ALPHA` 0.90);apf_task.c 对 VFH 目标角度跨帧 EMA (`VFH_EMA_ALPHA` 0.80,环绕安全处理)。(lidar_task.c **无** EMA)
-- **Motor control** (`diff_control()`): **dx/dy 直接差速映射**,无角度分解。`propulsion = dx × scale(|dy|)`, `steering = dy × STEER_GAIN`;自旋时 `× SPIN_GAIN`,后退 `× REV_GAIN`,超时 `MOTOR_TIMEOUT_MS` 归零。
+- **LPF 一阶低通滤波**: drv8833 核心层对 dx/dy 一阶低通 (`DRV8833_LPF_ALPHA` 0.90,`DRV8833_LPF_ENABLE`/`drv8833_set_lpf` 可启停);apf_task.c 对 VFH 目标角度跨帧 EMA (`VFH_EMA_ALPHA` 0.80,环绕安全处理)。(lidar_task.c **无** 滤波)
+- **Motor control**: drv8833 核心层底盘算法 (`internal/drv8833_chassis_diff4wd.c`): **dx/dy 直接差速映射**,无角度分解。`propulsion = dx × scale(|dy|)`, `steering = dy × STEER_GAIN`;自旋时 `× SPIN_GAIN`,后退 `× REV_GAIN`,超时 `DRV8833_TIMEOUT_MS` 归零。底盘类型由 `DRV8833_CHASSIS_SELECT` 宏选择 (2WD/麦克纳姆/履带预留)。
 
 ## Key Gotchas
 
 | # | What | Why |
 |---|---|---|
-| 1 | `ld14p_calibrate()` is **commented out** in `lidar_task.c:85` | LiDAR 0° PCB reversal not software-corrected yet |
+| 1 | `ld14p_calibrate()` is **commented out** in `lidar_task.c` | LiDAR 0° PCB reversal not software-corrected yet |
 | 2 | Flame GPIO 16 (center, angle 0°) is **not wired** | Pull-up keeps HIGH → always "no fire" |
 | 3 | `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n` (v6.0 改名自 `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`) | Task stacks stay in internal RAM (~4K words max safe) |
-| 4 | Motor min duty 75 (`MOTOR_MIN_DUTY`) | Overcomes static friction; duty→count linear map starts from `MOTOR_MIN_COUNT` |
+| 4 | Motor min duty 75 (`DRV8833_MIN_DUTY_PCT` in `drv8833_config.h`) | Overcomes static friction; duty→count linear map starts from `DRV8833_MIN_DUTY` |
 | 5 | Web task reads `g_apf_rep`/`g_vfh_att` globals (not queue) | `apf_compute()` writes APF repulsion and VFH attraction separately to globals; web_task snapshots them for the WS `v_apf`/`v_vfh` fields. Combined cmd is computed client-side (`cmd = v_apf + v_vfh`). Motor control uses `q_cart` only |
 | 6 | `temp_task.c` uses **ESP32-S3 internal temperature sensor**, not DS18B20 | Old DS18B20 code preserved in `#if 0` block; driver at `drivers/ds18b20.c` is dead code |
 | 7 | Flame sensor init failure halts boot (`return` from `app_main`) | Logged as `ESP_LOGW` not `ESP_LOGE` — visually non-obvious but still fatal |

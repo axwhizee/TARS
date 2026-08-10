@@ -25,9 +25,9 @@
 
 #include "apf_common.h"
 #include "sys_init.h"
-#include "drivers/ld14p.h"
+#include "drivers/ld14p/ld14p.h"
 // #include "drivers/ds18b20.h"
-#include "drivers/drv8833.h"
+#include "drivers/drv8833/drv8833.h"
 #include "tasks/lidar_task.h"
 #include "tasks/flame_task.h"
 #include "tasks/temp_task.h"
@@ -49,6 +49,16 @@ QueueHandle_t        q_temp;    // DS18B20 温度数据 (depth=4)
 QueueHandle_t        q_log;     // 日志透传队列 (vector_polar_t, 供 web_task 读取)
 EventGroupHandle_t   eg_sync;   // 传感器就绪 + 日志就绪事件组
 
+// LD14P 驱动实例 (lidar_task.c 中 extern 引用)
+
+ld14p_handle_t       g_ld14p;
+static const ld14p_cfg_t ld14p_cfg = { .target_freq_hz = SENSOR_FREQ };
+
+// DRV8833 电机驱动实例 (motor_task.c 中 extern 引用)
+
+drv8833_handle_t     g_motor;
+static const drv8833_cfg_t motor_cfg = { .vel_max_mm = APF_RANGE_MAX };
+
 void app_main(void) {
     ESP_LOGI(TAG, "\nSystem Initializing...\n");
 
@@ -62,9 +72,11 @@ void app_main(void) {
     // 2. 外设驱动初始化 (LD14P / DRV8833 / DS18B20 / Flame)
 
     // LiDAR 传感器驱动
-    if (ld14p_init() != ESP_OK) { ESP_LOGE(TAG, "LD14P init failed"); return; }
+    if (ld14p_init(&g_ld14p, &ld14p_cfg) != LD14P_OK) {
+        ESP_LOGE(TAG, "LD14P init failed"); return;
+    }
     // 电机 PWM 驱动
-    if (motor_init() != ESP_OK) { ESP_LOGE(TAG, "Motor init failed"); return; }
+    if (drv8833_init(&g_motor, &motor_cfg) != DRV8833_OK) { ESP_LOGE(TAG, "Motor init failed"); return; }
     // DS18B20 — 已改用 ESP32-S3 内置温度传感器 (消除 1-Wire 关中断干扰)
     // if (ds18b20_init() != ESP_OK) { ESP_LOGW(TAG, "DS18B20 init failed"); }
     // 火焰传感器 初始化
@@ -88,7 +100,7 @@ void app_main(void) {
     // Core 1: 所有传感器/控制任务
     //  xTaskCreatePinnedToCore(func, name, stack, param, prio, handle, core)
 
-    motor_set(0, 0);
+    drv8833_set_speed(&g_motor, 0, 0);
     xEventGroupSetBits(eg_sync, BIT_MANUAL_MODE);   // 初始状态设置为手动模式，需要手动切换
     xTaskCreatePinnedToCore(flame_task, "flame",    3072, NULL, 7, NULL, 1);    // Core1
     xTaskCreatePinnedToCore(temp_task,  "temp",     4096, NULL, 6, NULL, 1);    // Core1

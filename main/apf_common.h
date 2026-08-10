@@ -55,38 +55,21 @@ extern vector_cart_t        g_vfh_att;  // VFH 引力分量 (web 可视化)
 // 引脚分配
 
 #define WS2812_PIN          48  // 开发板WS2812灯珠数据引脚
-#define MOTOR_AIN1_PIN      5   // AIN1
-#define MOTOR_AIN2_PIN      6   // AIN2
-#define MOTOR_BIN1_PIN      7   // BIN1
-#define MOTOR_BIN2_PIN      15  // BIN2
-#define LD14P_UTX_PIN       17  // UTX，接LD14P-RX
-#define LD14P_URX_PIN       18  // URX，接LD14P-TX
+// 电机引脚已随驱动迁移至 drivers/drv8833/port/drv8833_port_def.h
+// LD14P 引脚与串口配置已随驱动迁移至 drivers/ld14p/port/ld14p_port_def.h
 // 注意；修改该参数同时应修改`flame_task.c`中的`flame_sensors`
 #define FLAME_GPIO_MASK     ((1ULL << 16) | (1ULL << 14) | (1ULL << 13) | (1ULL << 12) | (1ULL << 11))
 #define DS18B20_PIN         9   // TEMP-DQ
 
-// LD14P连线指南：1(Red)<->UTX, 2(Black)<->GND, 3(Yellow)<->URX, 4(Green)<->VCC
-
 /**
 上述为临时设置，下面是正常设置（匹配最新PCB）
 WS2812_PIN          48  // 开发板WS2812灯珠数据引脚
-MOTOR_AIN1_PIN      11  // AIN1
-MOTOR_AIN2_PIN      12  // AIN2
-MOTOR_BIN1_PIN      13  // BIN1
-MOTOR_BIN2_PIN      14  // BIN2
-LD14P_UTX_PIN       17  // UTX，接LD14P-RX
-LD14P_URX_PIN       18  // URX，接LD14P-TX
 FLAME_GPIO_MASK     ((1ULL << 4) | (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8))
 DS18B20_PIN         9   // TEMP-DQ
  */
 
-// LD14P 配置
+// 激光雷达后处理配置（LD14P 线协议参数已迁移至 drivers/ld14p/）
 
-#define LD14P_UART_NUM      UART_NUM_1  // 通信串口
-#define LD14P_UART_RX_BUF   2048    // 接收缓冲区大小
-#define LD14P_UART_BAUD     115200  // 波特率
-#define LD14P_POINTS_FRAME  12      // 每个雷达数据帧包含的点数量
-#define LD14P_POINTS_ALL    360     // 雷达完整一周的点云数量
 #define LIDAR_SHIFT_DEG     -5.0f   // 雷达测量值偏移，叠加后得到实际值
 #define LIDAR_SECTORS       72      // 降采样后的点数，请确保该值是360的因数
 #define LIDAR_MIN_WEIGHT    2 - 1   // 区间最小值权重，在降采样时对区间最小值会加权
@@ -142,20 +125,7 @@ typedef struct {
 
 extern apf_params_t g_apf_params;
 
-// 电机驱动配置
-
-#define MOTOR_PWM_FREQ      20000   // PWM 频率 20kHz
-#define MOTOR_PWM_RES_BITS  10      // 定时器计数器位数（分辨率）
-#define MOTOR_MAX_COUNT     ((1U << MOTOR_PWM_RES_BITS) - 1)    // 计数器大小（2^BITS - 1）
-#define MOTOR_MIN_DUTY      75      // 能克服电机静摩擦力的最低有效占空比，需根据实测情况设置
-#define MOTOR_MIN_COUNT     (MOTOR_MAX_COUNT * MOTOR_MIN_DUTY / 100U)    // 占空比对应的计数器值
+// 电机控制任务频率（控制频率为传感器工作频率的两倍）
+// 其余电机配置已迁移至 drivers/drv8833/（drv8833_config.h + port_def.h）
 
 #define MOTOR_FREQ_HZ       SENSOR_FREQ * 2     // 电机控制任务频率，为传感器工作频率的两倍
-#define MOTOR_MAX_MM        APF_RANGE_MAX   // 输出幅值上限，用于向量归一化，影响平均速度
-#define MOTOR_EMA_ALPHA     0.90f   // 平滑滤波，α 越大响应越快，取 1 时无平滑效果
-#define MOTOR_TIMEOUT_MS    500     // 指令超时阈值（ms），超时停车
-#define MOTOR_DX_COUPLING   0.20f   // 转向减速系数，值越高小车转向时速度越慢
-#define MOTOR_STEER_GAIN    0.50f   // 差速转向增益
-#define MOTOR_SPIN_GAIN     0.10f   // 原地旋转系数
-#define MOTOR_REV_GAIN      0.40f   // 小车后退时的系数修正
-#define MOTOR_DEAD_ZONE     0.01f   // 死区阈值 (归一化 [-1,1])

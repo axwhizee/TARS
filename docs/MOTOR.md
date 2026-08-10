@@ -24,8 +24,8 @@
 
 ### 2.4 PWM 配置 (ESP32-S3 LEDC)
 *   **当前默认**: `20kHz / 10-bit (0-1023) / clk_cfg=LEDC_USE_APB_CLK (80MHz)`。
-*   **API**: `motor_set(left%, right%)` — 百分比制 `[-100, 100]`, 0 = 滑行停车。内部将 `[1%, 100%]` 线性映射到 `[MIN_EFF (=72%×MAX), MAX]`。调用方无需关心底层分辨率。
-*   **可切换为**: `40kHz / 8-bit (0-255)`，仅需修改 `apf_common.h` 中的 `MOTOR_PWM_FREQ` 与 `MOTOR_PWM_RES_BITS`。
+*   **API**: `drv8833_set_speed(&h, left%, right%)` — 百分比制 `[-100, 100]`, 0 = 滑行停车。内部将 `[1%, 100%]` 线性映射到 `[MIN_DUTY (=75%×MAX), MAX]`。调用方无需关心底层分辨率。
+*   **可切换为**: `40kHz / 8-bit (0-255)`，仅需修改 `drivers/drv8833/drv8833_config.h` 中的 `DRV8833_PWM_FREQ_HZ` 与 `DRV8833_PWM_RES_BITS`。
 *   **速度模式陷阱**: ESP32-S3 **不支持** `LEDC_HIGH_SPEED_MODE` (仅原始 ESP32 支持)。必须使用 `LEDC_LOW_SPEED_MODE`，时钟源通过 `clk_cfg` 字段控制。
     *   用 `LEDC_USE_APB_CLK` 显式选择 80MHz APB 时钟，不要依赖 `LEDC_AUTO_CLK`（可能选中 RC_FAST 17.5MHz 导致频率不足）。
 
@@ -79,9 +79,9 @@
 
 ### 4.0 环境准备
 
-*   将 ESP32 刷入固件，确保 `motor_init()` 已被调用 (PWM 通道已配置)。
+*   将 ESP32 刷入固件，确保 `drv8833_init()` 已被调用 (PWM 通道已配置)。
 *   在排查期间，**将小车悬空或断开电机与驱动输出的连接**，防止意外转动。
-*   如需主动发送 PWM，可临时在 `app_main()` 中 `motor_init()` 之后插入测试代码 (见 4.4)。
+*   如需主动发送 PWM，可临时在 `app_main()` 中 `drv8833_init()` 之后插入测试代码 (见 4.4)。
 
 ### 4.1 电源检查
 
@@ -93,22 +93,22 @@
 
 ### 4.2 静态电平检查 (PWM 全开/全关)
 
-利用 `motor_brake()` 和 `motor_coast()` 函数，它们直接将 IN 引脚置为持续 HIGH 或 LOW，无需 PWM：
+利用 `drv8833_brake()` 和 `drv8833_coast()` 函数，它们直接将 IN 引脚置为持续 HIGH 或 LOW，无需 PWM：
 
-1. 调用 `motor_brake()` 后，测量 **AIN1, AIN2, BIN1, BIN2 ↔ GND**，均应为 **~3.3V**。
-2. 调用 `motor_coast()` 后，同样测量上述引脚，均应为 **~0V**。
+1. 调用 `drv8833_brake(&h)` 后，测量 **AIN1, AIN2, BIN1, BIN2 ↔ GND**，均应为 **~3.3V**。
+2. 调用 `drv8833_coast(&h)` 后，同样测量上述引脚，均应为 **~0V**。
 
 若两轮测试都通过，说明 ESP32 GPIO → DRV8833 IN 引脚的信号通路正常。
 
 若全为 0V 或全为高阻态：
 *   检查 IN 引脚与 ESP32 GPIO 之间的接线。
-*   确认 `motor_init()` 是否返回 `ESP_OK` (检查串口日志有无 "Motor initialized")。
+*   确认 `drv8833_init()` 是否返回 `DRV8833_OK` (检查串口日志有无 "DRV8833 initialized")。
 
 ### 4.3 PWM 平均电压检查
 
 万用表 DC 档测 PWM 信号时，会显示 **平均电压 = 占空比 × 3.3V**。
 
-1. 临时调用 `motor_set(818, 818)` (80% 正向满速)。
+1. 临时调用 `drv8833_set_speed(&h, 80, 80)` (80% 正向满速)。
 2. 测量：
 
 | 引脚 | 预期 DC 电压 | 说明 |
@@ -118,33 +118,31 @@
 | BIN1 (GPIO7) | ~2.64V | 80% PWM |
 | BIN2 (GPIO15) | ~0V | 0% |
 
-3. 再调用 `motor_set(-818, -818)` (反向)，AIN1/BIN1 应变为 ~0V，AIN2/BIN2 应变为 ~2.64V。
+3. 再调用 `drv8833_set_speed(&h, -80, -80)` (反向)，AIN1/BIN1 应变为 ~0V，AIN2/BIN2 应变为 ~2.64V。
 
 若某引脚始终 0V 或始终 3.3V，检查对应 GPIO 是否被其他外设占用，或 LEDC 通道配置是否冲突。
 
 ### 4.4 最小化测试代码
 
-在 `app_main()` 中 `motor_init()` 之后临时插入，跳过 APF/Task 链路直接驱动：
+在 `app_main()` 中 `drv8833_init()` 之后临时插入，跳过 APF/Task 链路直接驱动：
 
 ```c
 static void motor_test_drive(void) {
-    const int full = MOTOR_MAX_DUTY;      /* 1023 */
-    const int step_ms = 40;               /* 每级时长 */
-    int duty;
+    int pct;                          /* 0~100% */
+    const int step_ms = 40;           /* 每级时长 */
 
-    ESP_LOGI(TAG, "=== Threshold Test: 0→%d, step=%dms, 20kHz 10-bit ===",
-             full, step_ms);
+    ESP_LOGI(TAG, "=== Threshold Test: 0→100%%, step=%dms, 20kHz 10-bit ===", step_ms);
 
     while (1) {
-        for (duty = 0; duty <= full; duty++) {
-            motor_set(duty, duty);
-            if (duty % 10 == 0) {
-                ESP_LOGI(TAG, "duty: %d/100", duty * 100 / 1024);
+        for (pct = 0; pct <= 100; pct++) {
+            drv8833_set_speed(&g_motor, (int8_t)pct, (int8_t)pct);
+            if (pct % 10 == 0) {
+                ESP_LOGI(TAG, "duty: %d%%", pct);
             }
             vTaskDelay(pdMS_TO_TICKS(step_ms));
         }
         ESP_LOGI(TAG, "--- Coast 1s ---");
-        motor_coast();
+        drv8833_coast(&g_motor);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -189,52 +187,54 @@ static void motor_test_drive(void) {
 
 ---
 
-## 6. 软件架构整合 (motor_task.c)
+## 6. 软件架构整合
 
-底层驱动 `drv8833.c` 仅提供 `motor_set(l, r)` 等 PWM 原子操作。
-上层控制逻辑由 `src/tasks/motor_task.c` 实现，关键设计：
+底层驱动为 `drivers/drv8833/` **adapt-drv 分层驱动库**（核心层 + `internal/` 底盘算法 + `port/` LEDC 移植层）。
+控制任务 `tasks/motor_task.c` 只做薄封装：队列接收 → `drv8833_set_velocity()` → 周期 `drv8833_update()`。
 
-### 6.1 EMA 平滑滤波
+### 6.1 一阶低通滤波 (LPF)
 
-APF 输出的 `q_cart` (笛卡尔合力向量) 先经一阶低通滤波，再送入转向公式：
+`q_cart` (笛卡尔合力向量) 在 drv8833 核心层内经一阶低通滤波，再送入底盘算法：
 
 ```
 y[n] = α·target + (1-α)·y[n-1]
-α = 1 - exp(-dt/τ)
+α = DRV8833_LPF_ALPHA = 0.90（drv8833_config.h，可编译期/运行期启停）
 dt = 1000/MOTOR_FREQ_HZ = 125ms (8Hz)
 ```
 
-| τ 值 | α | 阶跃响应 |
-|---|---|---|
-| 25ms (默认) | 0.993 | 单帧即达，几乎无平滑 |
-| 150ms | 0.565 | 3~5 帧收敛，柔和过渡 |
-| 200ms | 0.465 | 5~7 帧收敛，大幅平滑 |
+| α 值 | 阶跃响应 |
+|---|---|
+| 0.90 (默认) | 快速收敛，抑制单帧跳变 |
+| 1.00 | 无平滑（直通） |
+| 0.50 | 大幅平滑 |
 
-### 6.2 幅值-角度分解差速 (diff_control)
+### 6.2 四轮差速映射 (internal/drv8833_chassis_diff4wd.c)
 
-当前启用的控制算法。将 `(dx, dy)` 力向量分解为 magnitude + angle, 独立映射速度与转向：
+当前启用的底盘算法：**dx/dy 直接差速映射**，无角度分解。转向比例始终可预测，调参直观：
 
 ```
-mag   = sqrt(dx² + dy²)
-angle = atan2(dy, dx)          // 0=正前方, +向右, rad
-
-if |angle| ≥ MOTOR_SPIN_THRESH_DEG (75°):
-    → 原地转向模式
-    spin = min(mag/MAX, 1) × MOTOR_SPIN_SPEED
-    left = -spin × sign(sin(angle))
-    right = +spin × sign(sin(angle))
-else:
-    → 前进/后退 + 转向模式
-    speed = cos(angle)          // 自然缩放: 0°→1, 90°→0, 180°→-1
-    turn  = sin(angle) × MOTOR_TURN_GAIN_BASE
-    left  = speed - turn
-    right = speed + turn
-    → 比例归一化(仅在超限时) → motor_set(left%, right%)
+dx_u = dx / vel_max_mm           // 归一化到 [-1, 1]
+dy_u = dy / vel_max_mm
+scale = 1 - |dy_u| × DX_COUPLING // |dy| 越大前进越慢，避免转向过快致雷达畸变
+propulsion = dx_u × scale
+steering   = dy_u × STEER_GAIN
+if propulsion < DEAD_ZONE: propulsion ×= REV_GAIN   // 后退减速
+left  = propulsion - steering
+right = propulsion + steering
+if left×right < 0: left/right ×= SPIN_GAIN          // 自旋时削弱转速
+→ 比例限幅(仅在超限时) → drv8833_set_speed(left%, right%)
 ```
 
-设计目标: 转向率与线速度解耦, 避免高速前进时比例限幅导致转向速度减半;
-原地转向转速由力幅值自然缩放 (近障碍物时力小→转速慢, 开阔空间力大→转速快)。
+设计目标：无角度分解的非线性跳跃，转向率可预测；
+原地转向转速由 dy 幅值自然缩放（近障碍物时力小→转速慢，开阔空间力大→转速快）。
 
-### 6.3 旧算法 (已弃用, 代码已删除)
+### 6.3 底盘扩展
 
-原 `motor_classify()` 将合力向量分为 5 种模式 (M_DEAD/M_SPIN/M_SPIN_L/M_FWD/M_REV), 每个模式独立计算 PWM。已被 6.2 的幅值-角度分解替代。
+`DRV8833_CHASSIS_SELECT` 宏选择底盘算法。当前实现 `DIFF_4WD`；
+2WD / 麦克纳姆轮 / 履带为预留接口（`internal/drv8833_chassis.c` 注册表分发，
+未实现类型 `init()`/`update()` 返回 `DRV8833_ERR_NOT_SUPPORTED`）。
+
+### 6.4 旧算法 (已弃用, 代码已删除)
+
+原 `motor_classify()` 将合力向量分为 5 种模式 (M_DEAD/M_SPIN/M_SPIN_L/M_FWD/M_REV), 每个模式独立计算 PWM。
+早期还尝试过幅值-角度分解 (`atan2` 求角 + `cos/sin` 映射)。均已被 6.2 的直接差速映射替代。

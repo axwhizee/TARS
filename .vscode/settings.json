@@ -5,7 +5,6 @@
     "clangd.arguments": [
         "--compile-commands-dir=${workspaceFolder}/build",
         "--query-driver=C:/Users/Richa/.espressif/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc*",
-        "--background-index",
         "--header-insertion=never"
     ],
     "files.eol": "\n"

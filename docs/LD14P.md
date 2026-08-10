@@ -39,15 +39,17 @@
 ### 文件结构
 
 ```
-├── include/
-│   ├── apf_common.h              ← LD14P/UART 宏定义 (波特率, 扇区数, 串口号)
-│   ├── drivers/ld14p.h           ← 驱动 API: init, parse, collect, calibrate
-│   └── tasks/lidar_task.h        ← 传感器任务声明
-└── src/
-    ├── main.c                    ← ld14p_init() + 队列/事件组创建
-    ├── drivers/ld14p.c           ← 协议状态机, CRC8, 圈检测, 频率命令
-    └── tasks/
-        └── lidar_task.c          ← UART 轮询 → 状态机 → 360→60 降采样 → q_polar
+drivers/ld14p/                     ← 按 adapt-drv v6.0 分层的驱动库 (详见其 README.md)
+├── internal/ld14p_utils.c         ← CRC8 查表与计算 (仅核心层内部引用)
+├── port/
+│   ├── ld14p_port_def.h           ← 硬件资源: 串口/引脚/波特率 (仅移植层引用)
+│   └── ld14p_port.c               ← ESP32-S3 UART 实现 (唯一平台 HAL 位置)
+├── ld14p_config.h                 ← 协议编码公式 + LD14P_RTOS_ACTIVE 开关
+├── ld14p_types.h                  ← ld14p_err_t / ld14p_handle_t / 帧·点结构
+├── ld14p.h/.c                     ← 公共 API (init/feed_byte/collect/process/calibrate)
+└── README.md                      ← 驱动库文档与移植指南
+main/main.c                        ← ld14p_init(&g_ld14p, &cfg) + 队列/事件组创建
+tasks/lidar_task.c                 ← ld14p_process 轮询 → 360→72 降采样 → q_polar
 ```
 
 ### 数据流
@@ -58,34 +60,34 @@ RX(18)──← LD14P TX (115200, 47字节数据包)
     │
     ▼
 ld14p_task (prio 5, stack 8192 words)
-    ├─ uart_read_bytes → ld14p_parse(byte) → 状态机拼帧
-    ├─ ld14p_collect(frm) → cloud_360[360] + 圈检测
-    └─ [一圈完成] lidar_process(cloud) → 60 sectors
-         → xQueueSend ×60 to q_polar[65]
+    ├─ ld14p_process(&g_ld14p) → 移植层读 UART + 状态机拼帧 + 圈检测
+    └─ [一圈完成] lidar_process(cloud) → 72 sectors
+         → xQueueSend ×72 to q_polar[77]
                     │
-              q_polar (depth 65: 60 lidar + 5 flame)
+              q_polar (depth 77: 72 lidar + 5 flame)
                     │
               apf_task (prio 4)
                     │
-            q_cart[1] + q_log[65] + WebSocket JSON
+            q_cart[1] + q_log[77] + WebSocket JSON
 ```
 
 ### 功能拆分
 
 | 文件 | 职责 |
 |------|------|
-| `drivers/ld14p.c` | **协议层** — 状态机拼 47B 帧, CRC8 校验, 角度插值, 圈检测 (跨 0° + 防抖) |
-| `tasks/lidar_task.c` | **数据层** — UART 非阻塞轮询, 馈入状态机, 一圈完成后降采样 360→60, 推入 q_polar |
-| `include/drivers/ld14p.h` | 帧结构定义 (`ld14p_frame_t`), `ld14p_point_t`, 驱动 API 声明 |
+| `drivers/ld14p/ld14p.c` | **核心层(协议)** — 状态机拼 47B 帧, CRC8 校验, 角度插值, 圈检测 (跨 0° + 防抖), 频率命令 |
+| `drivers/ld14p/port/ld14p_port.c` | **移植层** — ESP32-S3 UART 收发/延时/时间戳, 按 `LD14P_RTOS_ACTIVE` 切换 RTOS/裸机实现 |
+| `tasks/lidar_task.c` | **数据层** — 驱动轮询, 一圈完成后降采样 360→72, 推入 q_polar |
 
 ### API 函数
 
 | 函数 | 签名 | 职责 |
 |------|------|------|
-| `ld14p_init()` | `esp_err_t → esp_err_t` | 初始化 UART1 (115200), 清 cloud_360, 发送 0xA2 频率命令 (目标频率=SENSOR_FREQ) |
-| `ld14p_parse(byte)` | `uint8_t → const ld14p_frame_t *` | 字节级状态机: 搜帧头 0x54 → 拼 47B → VerLen 检查 → CRC8 验证 → 返回帧指针 |
-| `ld14p_collect(frm)` | `const ld14p_frame_t * → const vector_polar_t *` | 角度插值写入 cloud_360[360], 圈检测 (末点跨 0° + 150ms 防抖), 完成一圈返回 cloud_360 指针, 未完成返回 NULL |
-| `ld14p_calibrate(pts, x, y)` | `vector_polar_t *, float, float → void` | 几何标定: 根据激光器偏离旋转中心的 offset 修正角度 (当前未启用) |
+| `ld14p_init(h, cfg)` | `ld14p_handle_t *, const ld14p_cfg_t * → ld14p_err_t` | 初始化 UART1 (115200), 清点云, 发送 0xA2 频率命令 (目标频率=SENSOR_FREQ) |
+| `ld14p_feed_byte(h, byte, out)` | `ld14p_handle_t *, uint8_t, const ld14p_frame_t ** → ld14p_err_t` | 字节级状态机: 搜帧头 0x54 → 拼 47B → VerLen 检查 → CRC8 验证 → 返回帧指针 |
+| `ld14p_collect(h, frm, out)` | `ld14p_handle_t *, const ld14p_frame_t *, const ld14p_polar_t ** → ld14p_err_t` | 角度插值写入 cloud[360], 圈检测 (末点跨 0° + 150ms 防抖), 完成一圈返回点云, 未完成返回 LD14P_ERR_NOT_READY |
+| `ld14p_process(h, out)` | `ld14p_handle_t *, const ld14p_polar_t ** → ld14p_err_t` | 轮询主入口: 移植层读 UART → feed_byte → collect, 一圈完成返回 LD14P_OK |
+| `ld14p_calibrate(pts, cnt, x, y)` | `ld14p_polar_t *, uint16_t, float, float → ld14p_err_t` | 几何标定: 修正激光器偏离旋转中心的 offset 误差 (当前未启用) |
 
 ### vector_polar_t 结构
 

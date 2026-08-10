@@ -11,6 +11,8 @@ idf_component_register(
         ${CMAKE_SOURCE_DIR}/main
         ${CMAKE_SOURCE_DIR}/tasks
         ${CMAKE_SOURCE_DIR}/drivers
+        ${CMAKE_SOURCE_DIR}/drivers/ld14p
+        ${CMAKE_SOURCE_DIR}/drivers/drv8833
         ${CMAKE_SOURCE_DIR}/libs
         ${CMAKE_SOURCE_DIR}
     REQUIRES

@@ -26,8 +26,8 @@ ESP32_Template/
 │   ├── CMakeLists.txt            # 源文件自动发现 + 组件依赖
 │   ├── drivers/
 │   │   ├── ds18b20.c             # DS18B20 驱动 (死代码, 已被内部温度传感器替代)
-│   │   ├── ld14p.c               # LD14P UART 协议帧解析 + CRC8 校验
-│   │   └── drv8833.c             # DRV8833 LEDC PWM 输出 + 制动
+│   │   ├── ld14p/                # LD14P UART 协议帧解析 + CRC8 校验 (adapt-drv 分层)
+│   │   └── drv8833/              # DRV8833 LEDC PWM 输出 + 制动 + 底盘算法 (adapt-drv 分层)
 │   └── tasks/
 │       ├── web_task.c            # HTTP/WS 服务器 + JSON 推送 + 手动遥控
 │       ├── lidar_task.c          # LiDAR 数据采集 + 360→72 降采样
